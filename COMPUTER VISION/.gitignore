@@ -1,0 +1,8 @@
+# Ignorar una base de datos SQLite
+melanoma_model_1.weights.h5
+
+# Ignorar una carpeta completa
+carpeta_de_backups/
+
+# Ignorar todos los archivos con una extensión específica
+*.log
