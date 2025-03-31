@@ -1,0 +1,19 @@
+#pesos modelo_1_torch and modelo_1
+COMPUTER_VISION/melanoma_model_1_torch.pth
+COMPUTER_VISION/melanoma_model_1.weights.h5
+
+
+#images
+images
+
+#dataset_papers
+dataset_papers
+
+#faiss melanoma
+#no subir nada de lo que esta en la carpeta faiss_melanoma
+NLP/CHATBOT/faiss_melanoma/*
+
+#flagged
+NLP/CHATBOT/flagged
+
+
