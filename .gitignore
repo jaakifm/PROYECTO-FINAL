@@ -11,7 +11,7 @@ dataset_papers
 
 #faiss melanoma
 #no subir nada de lo que esta en la carpeta faiss_melanoma
-NLP/CHATBOT/faiss_melanoma/*
+NLP/CHATBOT/faiss_melanoma
 
 #flagged
 NLP/CHATBOT/flagged
