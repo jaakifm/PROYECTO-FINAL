@@ -139,6 +139,7 @@ def fine_tune_model(model, tokenizer, train_dataset, output_dir):
 # ---- 3. APLICACION STREAMLIT ----
 
 def main():
+
     st.title("Fine-tuning de LLaMA 3.1 con Papers Académicos")
     
     # Sidebar para configuración
@@ -153,13 +154,13 @@ def main():
     # Modelo a utilizar
     model_path = st.sidebar.text_input(
         "Ruta del modelo LLaMA descargado",
-        value="mradermacher/Llama-3.1-MedPalm2-imitate-8B-Instruct-GGUF"
+        value="deepseek-ai/DeepSeek-V3-0324"
     )
     
     # Directorio de salida para el modelo fine-tuned
     output_dir = st.sidebar.text_input(
         "Directorio para guardar el modelo",
-        value=r"C:\Users\jakif\CODE\PROYECTO-FINAL\NLP\Generation_diagnosis"
+        value=r"C:\Users\jakif\CODE\PROYECTO-FINAL\NLP\Generation_diagnosis\output"
     )
     
     # Parámetros adicionales
