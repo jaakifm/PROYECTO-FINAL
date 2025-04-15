@@ -329,7 +329,7 @@ if st.session_state.finished:
     st.warning("""
     **IMPORTANT:** This application is for educational purposes only and is not a substitute for professional medical advice. 
     Always consult a dermatologist or healthcare provider for any concerns about skin lesions.
-    """)
+    """) 
     
     # Button to restart
     if st.button("Start Over"):
