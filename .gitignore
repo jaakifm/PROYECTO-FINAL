@@ -1,7 +1,8 @@
-#pesos modelo_1_torch and modelo_1
+#pesos modelos
 COMPUTER_VISION/melanoma_model_1_torch.pth
 COMPUTER_VISION/melanoma_model_1.weights.h5
-
+COMPUTER_VISION/melanoma_model_1_harvard.weights.h5
+COMPUTER_VISION/melanoma_model_1_torch_RESNET50_harvard.pth
 
 #images
 images
@@ -11,9 +12,19 @@ dataset_papers
 
 #faiss melanoma
 #no subir nada de lo que esta en la carpeta faiss_melanoma
-NLP/CHATBOT/faiss_melanoma
+NLP/CHATBOT/faiss_melanoma 
+
 
 #flagged
 NLP/CHATBOT/flagged
 
 
+#modelo llama-3.1
+/Llama-3.1-MedPalm2-imitate-8B-Instruct.Q2_K.gguf
+/llama3.1
+
+
+#images
+NLP/CHATBOT/rules_based.png
+NLP/CHATBOT/results_naive_bayes.png
+NLP/CHATBOT/chatbot_naive_bayes.png
