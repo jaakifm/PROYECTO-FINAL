@@ -12,13 +12,24 @@ The first step in the project involves creating a basic chatbot using lemmatizat
   - Lemmatizes user responses to identify key words such as "yes" or "no."
   - Returns a simple classification of responses as "yes," "no," or "Sorry, I don't understand."
 
-### 2. **Naive Bayes Model**
+### 2. **Rule Based Model**
+
+
+
+### 3. **Naive Bayes Model**
 The second stage involves building a more advanced chatbot using a Naive Bayes classification model. This model is implemented in the script [`modelo_naive_bayes.ipynb`](modelo_naive_bayes.ipynb).
 
 - **Key Features**:
   - Uses the `nltk` library for tokenization, stopword removal, and classification.
   - Trains a Naive Bayes classifier on a dataset of labeled responses.
   - Asks a predefined set of questions about melanoma symptoms and classifies user responses as "positive," "negative," or "I don't understand."
+
+
+  ![CHATBOT_NAIVE_BAYES](chatbot_naive_bayes.png)
+
+
+
+  
 
 ## How to Use
 
