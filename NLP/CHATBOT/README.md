@@ -27,9 +27,10 @@ The second stage involves building a more advanced chatbot using a Naive Bayes c
 
   ![CHATBOT_NAIVE_BAYES](chatbot_naive_bayes.png)
 
+  ![RESULTS_NAIVE_BAYES](results_naive_bayes.png)
 
 
-  
+
 
 ## How to Use
 
