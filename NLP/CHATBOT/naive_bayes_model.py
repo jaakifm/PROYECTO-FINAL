@@ -21,6 +21,9 @@ st.set_page_config(
 def get_severity_training_set():
     return [
         # Highly Concerning responses
+        ("it's grown a lot", "highly_concerning"),
+        ("it's changed a lot", "highly_concerning"),
+        ("always", "highly_concerning"),
         ("it's growing rapidly", "highly_concerning"),
         ("it's significantly larger now", "highly_concerning"),
         ("it's expanding quickly", "highly_concerning"),
@@ -71,7 +74,6 @@ def get_severity_training_set():
         ("it hasn't changed shape", "not_concerning"),
         ("the shape is constant", "not_concerning"),
         ("the color hasn't changed", "not_concerning"),
-        ("it's always been this color", "not_concerning"),
         ("it never bleeds", "not_concerning"),
         ("no bleeding at all", "not_concerning"),
         ("it doesn't itch", "not_concerning"),
@@ -165,7 +167,7 @@ def extract_advanced_features(text):
     
     # Add severity indicators
     severity_terms = {
-        "high": ["very", "extremely", "significantly", "a lot", "much", "greatly", "heavily", "severely"],
+        "high": ["very", "extremely", "significantly", "a lot", "much", "greatly", "heavily", "severely", "yes"],
         "moderate": ["somewhat", "moderately", "fairly", "quite", "rather"],
         "mild": ["slightly", "a bit", "a little", "mildly", "somewhat"]
     }
@@ -230,6 +232,9 @@ def extract_advanced_features(text):
         "bleeding": ["bleed", "bleeding", "bled", "blood"],
         "itching": ["itch", "itches", "itchy", "itching"],
         "pain": ["pain", "painful", "hurts", "hurt", "tender", "sore"],
+        "scab": ["scab", "crust", "non-healing", "not healing"],
+        "redness": ["red", "redness", "swollen", "swelling"],
+        "swelling": ["swollen", "swelling"],
         "irregular": ["irregular", "ragged", "uneven", "asymmetric", "asymmetrical", "not round"]
     }
     
@@ -286,38 +291,102 @@ question_weights = {
     14: 0.3, # Fair skin (less important)
 }
 
-# Initialize model
+# Initialize models
 @st.cache_resource
-def initialize_model():
-    training_set = get_training_set()
-    training_data = []
-    for text, label in training_set:
-        training_data.append((extract_word(text), label))
-    model = NaiveBayesClassifier.train(training_data)
-    return model
+def initialize_models():
+    # Train severity model
+    severity_training_set = get_severity_training_set()
+    severity_training_data = [(extract_advanced_features(text), label) for text, label in severity_training_set]
+    severity_model = NaiveBayesClassifier.train(severity_training_data)
+    
+    # Train certainty model
+    certainty_training_set = get_certainty_training_set()
+    certainty_training_data = [(extract_advanced_features(text), label) for text, label in certainty_training_set]
+    certainty_model = NaiveBayesClassifier.train(certainty_training_data)
+    
+    return severity_model, certainty_model
 
 # Classify answers
-def answer_classification(answer, model):
-    features = extract_word(answer)
-    return model.classify(features)
+def classify_answer(answer, severity_model, certainty_model):
+    features = extract_advanced_features(answer)
+    severity = severity_model.classify(features)
+    certainty = certainty_model.classify(features)
+    return severity, certainty
+
+# Calculate risk score based on responses
+def calculate_risk_score(responses, weights):
+    severity_values = {
+        "highly_concerning": 1.0,
+        "moderately_concerning": 0.7,
+        "mildly_concerning": 0.3,
+        "not_concerning": 0.0
+    }
+    
+    certainty_multipliers = {
+        "certain": 1.0,
+        "probable": 0.8,
+        "possible": 0.6,
+        "unlikely": 0.3,
+        "unknown": 0.5
+    }
+    
+    total_score = 0
+    max_possible = 0
+    
+    for question_idx, (severity, certainty) in enumerate(responses):
+        question_weight = weights[question_idx]
+        max_possible += question_weight
+        
+        response_score = (severity_values[severity] * 
+                         certainty_multipliers[certainty] * 
+                         question_weight)
+        
+        total_score += response_score
+    
+    # Return normalized score (0-100%)
+    return (total_score / max_possible) * 100 if max_possible > 0 else 0
+
+# Define severity descriptions
+severity_descriptions = {
+    "highly_concerning": "highly concerning",
+    "moderately_concerning": "moderately concerning",
+    "mildly_concerning": "mildly concerning",
+    "not_concerning": "not concerning"
+}
+
+# Define certainty descriptions
+certainty_descriptions = {
+    "certain": "with high certainty",
+    "probable": "with moderate certainty",
+    "possible": "with some uncertainty",
+    "unlikely": "with low likelihood",
+    "unknown": "with unclear certainty"
+}
+
+# Define severity colors
+severity_colors = {
+    "highly_concerning": "🔴",
+    "moderately_concerning": "🟠",
+    "mildly_concerning": "🟡",
+    "not_concerning": "🟢"
+}
 
 # Create title and description
-st.title("Melanoma Diagnosis Chatbot")
+st.title("Advanced Melanoma Diagnosis Chatbot")
 st.markdown("### Answer the questions with natural phrases to help evaluate your skin lesion.")
+st.markdown("This system uses a granular classification approach to better understand your responses.")
 
 # Initialize session state variables
 if 'current_question' not in st.session_state:
     st.session_state.current_question = 0
     st.session_state.answers = []
-    st.session_state.classifications = []
-    st.session_state.pos = 0
-    st.session_state.neg = 0
+    st.session_state.classifications = []  # Now stores (severity, certainty) tuples
     st.session_state.finished = False
     st.session_state.answer_submitted = False
     st.session_state.current_answer = ""
-    st.session_state.current_classification = ""
+    st.session_state.current_classification = ()  # Now a tuple
 
-model = initialize_model()
+severity_model, certainty_model = initialize_models()
 
 # Display current question and process the response
 if not st.session_state.finished and st.session_state.current_question < len(questions):
@@ -334,20 +403,32 @@ if not st.session_state.finished and st.session_state.current_question < len(que
     with col1:
         if st.button("Submit Answer"):
             if answer:
-                classification = answer_classification(answer, model)
+                # Get both severity and certainty classifications
+                severity, certainty = classify_answer(answer, severity_model, certainty_model)
                 
                 # Store current answer and classification in session state
                 st.session_state.current_answer = answer
-                st.session_state.current_classification = classification
+                st.session_state.current_classification = (severity, certainty)
                 st.session_state.answer_submitted = True
                 
-                # Show interpretation
-                if classification == "positive":
-                    st.success("I understand your answer as: 'Yes'")
-                elif classification == "negative":
-                    st.info("I understand your answer as: 'No'")
-                else:
-                    st.warning("I didn't understand your answer clearly. I'll consider it as partially positive.")
+                # Show interpretation with severity and certainty
+                severity_text = severity_descriptions[severity]
+                certainty_text = certainty_descriptions[certainty]
+                severity_icon = severity_colors[severity]
+                
+                st.markdown(f"""
+                **Interpretation:** {severity_icon} I understand this as **{severity_text}** {certainty_text}.
+                """)
+                
+                # Show detailed explanation based on classification
+                if severity == "highly_concerning":
+                    st.error("This response suggests a significant symptom that should be evaluated by a healthcare professional.")
+                elif severity == "moderately_concerning":
+                    st.warning("This response indicates a moderate level of concern that merits attention.")
+                elif severity == "mildly_concerning":
+                    st.info("This response shows a mild level of concern. Continue to monitor for changes.")
+                else:  # not_concerning
+                    st.success("This response does not indicate a concerning symptom for this question.")
             else:
                 st.error("Please provide an answer before submitting.")
     
@@ -360,18 +441,10 @@ if not st.session_state.finished and st.session_state.current_question < len(que
                 st.session_state.answers.append(st.session_state.current_answer)
                 st.session_state.classifications.append(st.session_state.current_classification)
                 
-                # Count positive and negative responses
-                if st.session_state.current_classification == "positive":
-                    st.session_state.pos += 1
-                elif st.session_state.current_classification == "negative":
-                    st.session_state.neg += 1
-                else:
-                    st.session_state.pos += 0.5
-                
                 # Reset for next question
                 st.session_state.answer_submitted = False
                 st.session_state.current_answer = ""
-                st.session_state.current_classification = ""
+                st.session_state.current_classification = ()
                 
                 # Move to next question
                 st.session_state.current_question += 1
@@ -380,55 +453,152 @@ if not st.session_state.finished and st.session_state.current_question < len(que
                 if st.session_state.current_question >= len(questions):
                     st.session_state.finished = True
                 
-
+                
 
 # Show summary when all questions have been answered
 if st.session_state.finished:
     st.subheader("Summary of your responses:")
     
-    for i, (question, answer, classification) in enumerate(zip(questions, st.session_state.answers, st.session_state.classifications)):
-        st.markdown(f"**Question {i+1}:** {question}")
-        st.markdown(f"**Your answer:** {answer}")
-        
-        if classification == "positive":
-            st.markdown("**Interpretation:** Yes ✓")
-        elif classification == "negative":
-            st.markdown("**Interpretation:** No ✗")
-        else:
-            st.markdown("**Interpretation:** Unclear ⚠️")
-        
-        st.markdown("---")
+    # Create columns for organizing the summary
+    col1, col2 = st.columns([2, 1])
     
-    st.subheader("Results:")
-    st.markdown(f"**Positive responses:** {st.session_state.pos}")
-    st.markdown(f"**Negative responses:** {st.session_state.neg}")
+    with col1:
+        for i, (question, answer, classification) in enumerate(zip(questions, st.session_state.answers, st.session_state.classifications)):
+            severity, certainty = classification
+            severity_text = severity_descriptions[severity]
+            certainty_text = certainty_descriptions[certainty]
+            severity_icon = severity_colors[severity]
+            
+            st.markdown(f"**Question {i+1}:** {question}")
+            st.markdown(f"**Your answer:** {answer}")
+            st.markdown(f"**Interpretation:** {severity_icon} {severity_text.capitalize()} {certainty_text}")
+            st.markdown("---")
     
-    # Simple assessment
-    if st.session_state.pos > 0.75 * len(questions):
-        st.error("Based on your responses, I recommend you see a doctor for further evaluation.")
+    with col2:
+        # Calculate risk score
+        risk_score = calculate_risk_score(st.session_state.classifications, question_weights)
+        
+        st.markdown("### Risk Assessment")
+        
+        # Display risk meter
+        st.markdown(f"**Overall Risk Score:** {risk_score:.1f}%")
+        
+        # Create a visual risk meter
+        risk_color = "green"
+        risk_message = "Low Risk"
+        
+        if risk_score >= 70:
+            risk_color = "red"
+            risk_message = "High Risk"
+        elif risk_score >= 40:
+            risk_color = "orange"
+            risk_message = "Moderate Risk"
+        elif risk_score >= 20:
+            risk_color = "yellow"
+            risk_message = "Low-Moderate Risk"
+        
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(to right, green, yellow, orange, red);
+                height: 20px;
+                border-radius: 10px;
+                position: relative;
+                margin: 10px 0;
+            ">
+                <div style="
+                    position: absolute;
+                    left: {risk_score}%;
+                    top: -15px;
+                    transform: translateX(-50%);
+                    font-size: 24px;
+                ">▼</div>
+            </div>
+            <div style="
+                color: {risk_color};
+                font-weight: bold;
+                font-size: 18px;
+                text-align: center;
+            ">{risk_message}</div>
+            """,
+            unsafe_allow_html=True
+        )
+        
+        # Display symptom categories
+        st.markdown("### Symptom Categories")
+        
+        # Group questions by category
+        categories = {
+            "Evolution (Change)": [0, 1, 2],
+            "Appearance": [3, 4],
+            "Symptoms": [5, 6, 7, 8, 9],
+            "Risk Factors": [10, 11, 12, 13, 14]
+        }
+        
+        for category, question_indices in categories.items():
+            category_responses = [st.session_state.classifications[i] for i in question_indices if i < len(st.session_state.classifications)]
+            if category_responses:
+                # Count concerning responses
+                concerning_count = sum(1 for severity, _ in category_responses if severity in ["highly_concerning", "moderately_concerning"])
+                total_count = len(category_responses)
+                
+                if concerning_count == 0:
+                    status = "✅"
+                elif concerning_count < total_count / 2:
+                    status = "⚠️"
+                else:
+                    status = "❌"
+                
+                st.markdown(f"{status} **{category}:** {concerning_count}/{total_count} concerning")
+    
+    # Recommendation based on risk score
+    st.subheader("Recommendation:")
+    
+    if risk_score >= 70:
+        st.error("""
+        **Based on your responses, it is strongly recommended that you consult with a dermatologist or healthcare provider as soon as possible.**
+        
+        Several concerning features have been identified that warrant professional evaluation.
+        """)
+    elif risk_score >= 40:
+        st.warning("""
+        **Based on your responses, it is recommended that you schedule an appointment with a healthcare provider for evaluation.**
+        
+        Some concerning features have been identified that should be professionally assessed.
+        """)
+    elif risk_score >= 20:
+        st.info("""
+        **Based on your responses, consider having this lesion checked during your next regular healthcare visit.**
+        
+        While there are some mildly concerning features, immediate action may not be necessary unless you notice changes.
+        """)
     else:
-        st.success("Based on your responses, it seems there is no immediate concern. However, if you have any doubts, please consult a doctor.")
+        st.success("""
+        **Based on your responses, there appear to be no immediate concerning features.**
+        
+        Continue to monitor the lesion for any changes. If you notice changes in size, shape, color, or if it begins to
+        itch, bleed, or cause discomfort, please seek medical advice.
+        """)
     
     st.markdown("### Thank you for your answers.")
     
     # Add disclaimer
     st.warning("""
     **IMPORTANT:** This application is for educational purposes only and is not a substitute for professional medical advice. 
+    The granular classification system provides more detailed analysis but is still experimental.
     Always consult a dermatologist or healthcare provider for any concerns about skin lesions.
-    """) 
+    """)
     
     # Button to restart
     if st.button("Start Over"):
         st.session_state.current_question = 0
         st.session_state.answers = []
         st.session_state.classifications = []
-        st.session_state.pos = 0
-        st.session_state.neg = 0
         st.session_state.finished = False
         st.session_state.answer_submitted = False
         st.session_state.current_answer = ""
-        st.session_state.current_classification = ""
-        st.experimental_rerun()
+        st.session_state.current_classification = ()
+        
 
 # Add information in the sidebar
 with st.sidebar:
@@ -443,22 +613,24 @@ with st.sidebar:
     - **C**olor: Variety of colors or uneven distribution
     - **D**iameter: Larger than 6mm (pencil eraser)
     - **E**volving: Changing in size, shape, or color
-    
-    ### Additional Symptoms
-    
-    - Itching or pain
-    - Bleeding or crusting
-    - Inflammation or redness
-    - Changes in sensitivity
     """)
     
+    st.markdown("### About Multi-Class Classification")
     st.markdown("""
-    ### Risk Factors
+    This enhanced version uses a multi-class classification system that evaluates:
     
-    - Excessive sun exposure
-    - History of severe sunburns
-    - Fair skin, light hair
-    - Family history of skin cancer
-    - Many moles (more than 50)
-    - Weakened immune system
+    **Severity Levels:**
+    - 🔴 **Highly Concerning**: Significant symptoms that warrant medical attention
+    - 🟠 **Moderately Concerning**: Notable symptoms that suggest further evaluation
+    - 🟡 **Mildly Concerning**: Minor symptoms that should be monitored
+    - 🟢 **Not Concerning**: No significant symptoms for this question
+    
+    **Certainty Levels:**
+    - **High Certainty**: Clear, definitive responses
+    - **Moderate Certainty**: Probable but not definitive responses
+    - **Some Uncertainty**: Possible but unclear responses
+    - **Low Likelihood**: Responses suggesting the symptom is unlikely
+    - **Unclear Certainty**: Responses where certainty cannot be determined
+    
+    This approach provides a more nuanced assessment than simple yes/no answers.
     """)
