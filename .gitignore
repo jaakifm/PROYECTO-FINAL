@@ -3,10 +3,18 @@ COMPUTER_VISION/melanoma_model_1_torch.pth
 COMPUTER_VISION/melanoma_model_1.weights.h5
 COMPUTER_VISION/melanoma_model_1_harvard.weights.h5
 COMPUTER_VISION/melanoma_model_1_torch_RESNET50_harvard.pth
-
-#images
+COMPUTER_VISION/melanoma_model_1_torch_EFFICIENTNETBO_harvard.pth
+COMPUTER_VISION/melanoma_model_1_harvard_balanced.weights.h5
+COMPUTER_VISION/melanoma_model_1_harvard_2.weights.h5
+COMPUTER_VISION/best_model.pth
+COMPUTER_VISION/best_model_f1.h5
+COMPUTER_VISION/best_model_epoch_28_f1_0.6545.h5
+COMPUTER_VISION/best_model_EFFICIENTBO.pth
+COMPUTER_VISION/best_model_EFFICIENTB3.pth
+COMPUTER_VISION/melanoma_model_1_harvard_balanced.weights.h5
 images
-
+COMPUTER_VISION/*.pth
+COMPUTER_VISION/*.h5
 #dataset_papers
 dataset_papers
 
@@ -28,3 +36,5 @@ NLP/CHATBOT/flagged
 NLP/CHATBOT/rules_based.png
 NLP/CHATBOT/results_naive_bayes.png
 NLP/CHATBOT/chatbot_naive_bayes.png
+"COMPUTER_VISION/*.pth" 
+"COMPUTER_VISION/*.h5" 
