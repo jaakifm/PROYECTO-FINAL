@@ -138,10 +138,107 @@ def get_certainty_training_set():
         ("I haven't paid attention", "unknown"),
     ]
 
-# Function to extract words
-def extract_word(text):
-    tokenized_text = word_tokenize(text.lower())  
-    return {word: True for word in tokenized_text}
+def extract_advanced_features(text):
+    text = text.lower()
+    tokens = word_tokenize(text)
+    
+    features = {}
+    
+    # Basic word presence features
+    for token in tokens:
+        if token not in stopwords.words("english"):
+            features[f"contains({token})"] = True
+    
+    # Add bigram features
+    bigrams = list(nltk.bigrams(tokens))
+    for bigram in bigrams:
+        features[f"bigram({bigram[0]}_{bigram[1]})"] = True
+    
+    # Check for negation patterns
+    negations = ["no", "not", "never", "doesn't", "don't", "didn't", "hasn't", "haven't", "isn't", "aren't", "wasn't"]
+    for i, token in enumerate(tokens):
+        if token in negations and i+1 < len(tokens):
+            # Mark the next few words as negated
+            for j in range(1, min(4, len(tokens)-i)):
+                if tokens[i+j] not in stopwords.words("english"):
+                    features[f"negated({tokens[i+j]})"] = True
+    
+    # Add severity indicators
+    severity_terms = {
+        "high": ["very", "extremely", "significantly", "a lot", "much", "greatly", "heavily", "severely"],
+        "moderate": ["somewhat", "moderately", "fairly", "quite", "rather"],
+        "mild": ["slightly", "a bit", "a little", "mildly", "somewhat"]
+    }
+    
+    for level, terms in severity_terms.items():
+        for term in terms:
+            if term in text or any(term == t for t in tokens):
+                features[f"severity({level})"] = True
+    
+    # Add certainty indicators
+    certainty_terms = {
+        "high": ["definitely", "certainly", "absolutely", "sure", "clearly", "undoubtedly", "without a doubt"],
+        "moderate": ["probably", "likely", "most likely", "think", "believe", "seems"],
+        "low": ["maybe", "perhaps", "possibly", "might", "could", "may"]
+    }
+    
+    for level, terms in certainty_terms.items():
+        for term in terms:
+            if term in text or any(term == t for t in tokens):
+                features[f"certainty({level})"] = True
+    
+    # Add frequency indicators
+    frequency_terms = {
+        "high": ["always", "constantly", "frequently", "regularly", "often", "every day"],
+        "moderate": ["sometimes", "occasionally", "now and then", "periodically"],
+        "low": ["rarely", "seldom", "once", "once or twice", "almost never"]
+    }
+    
+    for level, terms in frequency_terms.items():
+        for term in terms:
+            if term in text or any(term == t for t in tokens):
+                features[f"frequency({level})"] = True
+    
+    # Check for size-related terms
+    size_increase = ["bigger", "larger", "grown", "expanded", "increased", "growing"]
+    size_stable = ["same", "unchanged", "stable", "constant", "consistent"]
+    size_small = ["small", "tiny", "little"]
+    
+    for term in size_increase:
+        if term in tokens:
+            features["size_increase"] = True
+    for term in size_stable:
+        if term in tokens:
+            features["size_stable"] = True
+    for term in size_small:
+        if term in tokens:
+            features["size_small"] = True
+    
+    # Check for color-related terms
+    color_change = ["darkened", "darker", "changed color", "different color"]
+    color_multiple = ["colors", "multi-colored", "different shades", "varied"]
+    
+    for term in color_change:
+        if term in text:
+            features["color_change"] = True
+    for term in color_multiple:
+        if term in text:
+            features["color_multiple"] = True
+    
+    # Check for symptom terms
+    symptoms = {
+        "bleeding": ["bleed", "bleeding", "bled", "blood"],
+        "itching": ["itch", "itches", "itchy", "itching"],
+        "pain": ["pain", "painful", "hurts", "hurt", "tender", "sore"],
+        "irregular": ["irregular", "ragged", "uneven", "asymmetric", "asymmetrical", "not round"]
+    }
+    
+    for symptom, terms in symptoms.items():
+        for term in terms:
+            if term in tokens or term in text:
+                features[f"symptom({symptom})"] = True
+    
+    return features
 
 # Define questions
 questions = [
