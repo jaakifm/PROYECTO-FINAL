@@ -67,6 +67,8 @@ def get_severity_training_set():
         ("it might be a little asymmetrical", "mildly_concerning"),
         
         # Not Concerning responses
+        ("no"," not_concerning"),
+        ("nothing", "not_concerning"),
         ("it hasn't grown at all", "not_concerning"),
         ("it's still the same size", "not_concerning"),
         ("no change in size", "not_concerning"),
@@ -157,7 +159,7 @@ def extract_advanced_features(text):
         features[f"bigram({bigram[0]}_{bigram[1]})"] = True
     
     # Check for negation patterns
-    negations = ["no", "not", "never", "doesn't", "don't", "didn't", "hasn't", "haven't", "isn't", "aren't", "wasn't"]
+    negations = [ "no","not", "never", "doesn't", "don't", "didn't", "hasn't", "haven't", "isn't", "aren't", "wasn't"]
     for i, token in enumerate(tokens):
         if token in negations and i+1 < len(tokens):
             # Mark the next few words as negated
