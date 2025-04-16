@@ -239,7 +239,9 @@ def extract_advanced_features(text):
                 features[f"symptom({symptom})"] = True
     
     return features
-
+def extract_word(text):
+    tokenized_text = word_tokenize(text.lower())  
+    return {word: True for word in tokenized_text}
 # Define questions
 questions = [
     # Growth and Evolution (E in ABCDE)
@@ -265,6 +267,24 @@ questions = [
     "Do you have many moles (more than 50) on your body?",
     "Do you have fair skin that burns easily in the sun?"
 ]
+
+question_weights = {
+    0: 1.0,  # Growth in size (very important)
+    1: 0.9,  # Change in shape (very important)
+    2: 0.9,  # Change in color (very important)
+    3: 0.7,  # Size > 6mm (important)
+    4: 0.8,  # Different from other moles (important)
+    5: 0.6,  # Itchiness (moderately important)
+    6: 0.8,  # Bleeding (important)
+    7: 0.7,  # Redness/swelling (important)
+    8: 0.6,  # Pain/tenderness (moderately important)
+    9: 0.8,  # Non-healing scab (important)
+    10: 0.5, # Sun exposure (less important)
+    11: 0.6, # History of sunburns (less important) 
+    12: 0.7, # Family history (important)
+    13: 0.3, # Many moles (less important)
+    14: 0.3, # Fair skin (less important)
+}
 
 # Initialize model
 @st.cache_resource
