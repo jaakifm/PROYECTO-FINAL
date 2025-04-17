@@ -38,6 +38,6 @@ NLP/CHATBOT/results_naive_bayes.png
 NLP/CHATBOT/chatbot_naive_bayes.png
 "COMPUTER_VISION/*.pth" 
 "COMPUTER_VISION/*.h5" 
-CHATBOT/*.png
+"CHATBOT/*.png"
 CHATBOT/*.jpg
 CHATBOT/*.json
