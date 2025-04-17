@@ -13,17 +13,17 @@ from torch.utils.data import Dataset, DataLoader
 import os
 import argparse
 
-# Definir argumentos de línea de comandos
-parser = argparse.ArgumentParser(description='Entrenar y evaluar modelo transformer para clasificación de melanoma')
-parser.add_argument('--epochs', type=int, default=5, help='Número de épocas para entrenamiento')
-parser.add_argument('--batch_size', type=int, default=4, help='Tamaño del batch para entrenamiento')
-parser.add_argument('--save_path', type=str, default='./finetuned_model', help='Ruta para guardar el modelo')
-parser.add_argument('--test_size', type=float, default=0.2, help='Proporción del conjunto de prueba')
-parser.add_argument('--learning_rate', type=float, default=5e-5, help='Tasa de aprendizaje')
-parser.add_argument('--model_name', type=str, default='rjac/biobert-ICD10-L3-mimic', help='Nombre del modelo base')
+# Define command line arguments
+parser = argparse.ArgumentParser(description='Train and evaluate transformer model for melanoma classification')
+parser.add_argument('--epochs', type=int, default=30, help='Number of training epochs')
+parser.add_argument('--batch_size', type=int, default=4, help='Training batch size')
+parser.add_argument('--save_path', type=str, default='./finetuned_model', help='Path to save the model')
+parser.add_argument('--test_size', type=float, default=0.2, help='Test set proportion')
+parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
+parser.add_argument('--model_name', type=str, default='rjac/biobert-ICD10-L3-mimic', help='Base model name')
 args = parser.parse_args()
 
-# Clase de Dataset personalizada para PyTorch
+# Custom PyTorch Dataset class
 class MelanomaDataset(Dataset):
     def __init__(self, texts, labels, tokenizer, max_length=128):
         self.texts = texts
@@ -38,7 +38,7 @@ class MelanomaDataset(Dataset):
         text = self.texts[idx]
         label = self.labels[idx]
         
-        # Tokenizar el texto
+        # Tokenize the text
         encoding = self.tokenizer(
             text,
             truncation=True,
@@ -47,18 +47,18 @@ class MelanomaDataset(Dataset):
             return_tensors='pt'
         )
         
-        # Devolver un diccionario con las entradas y la etiqueta
+        # Return a dictionary with inputs and label
         return {
             'input_ids': encoding['input_ids'].flatten(),
             'attention_mask': encoding['attention_mask'].flatten(),
             'labels': torch.tensor(label, dtype=torch.long)
         }
     
-    # Método para obtener el texto original
+    # Method to get original text
     def get_text(self, idx):
         return self.texts[idx]
 
-# Función para cargar los datos
+# Function to load data
 def load_data(file_path):
     with open(file_path, 'r') as f:
         data = json.load(f)
@@ -66,17 +66,17 @@ def load_data(file_path):
     texts = [item['text'] for item in data['data']]
     labels = [item['label'] for item in data['data']]
     
-    # Crear mapeo de etiquetas a índices
+    # Create label to index mapping
     unique_labels = sorted(set(labels))
     label_to_id = {label: idx for idx, label in enumerate(unique_labels)}
     id_to_label = {idx: label for idx, label in enumerate(unique_labels)}
     
-    # Convertir etiquetas a índices
+    # Convert labels to indices
     label_ids = [label_to_id[label] for label in labels]
     
     return texts, label_ids, label_to_id, id_to_label, data
 
-# Función para predecir con un modelo - usando directamente el modelo sin pipeline
+# Function to predict with a model - using the model directly without pipeline
 def predict_with_model(model, tokenizer, texts, device="cpu"):
     model.eval()
     model.to(device)
@@ -85,15 +85,15 @@ def predict_with_model(model, tokenizer, texts, device="cpu"):
     
     with torch.no_grad():
         for text in texts:
-            # Tokenizar
+            # Tokenize
             inputs = tokenizer(text, return_tensors="pt", padding=True, truncation=True)
             inputs = {k: v.to(device) for k, v in inputs.items()}
             
-            # Predicción
+            # Prediction
             outputs = model(**inputs)
             logits = outputs.logits
             
-            # Obtener clase con mayor probabilidad
+            # Get class with highest probability
             probs = torch.softmax(logits, dim=1)
             pred_class = torch.argmax(probs, dim=1).item()
             pred_score = probs[0, pred_class].item()
@@ -103,24 +103,24 @@ def predict_with_model(model, tokenizer, texts, device="cpu"):
             
     return predictions, scores
 
-# Función para evaluar el modelo en el conjunto de prueba
+# Function to evaluate the model on the test set
 def evaluate_model(model, test_dataset, test_texts, tokenizer, id_to_label):
-    # Obtener etiquetas verdaderas
+    # Get true labels
     true_labels = [item['labels'].item() for i, item in enumerate(test_dataset)]
     
-    # Realizar predicciones directamente con el modelo
+    # Make predictions directly with the model
     predictions, confidence_scores = predict_with_model(model, tokenizer, test_texts)
     
-    # Calcular métricas
+    # Calculate metrics
     accuracy = accuracy_score(true_labels, predictions)
     precision, recall, f1, _ = precision_recall_fscore_support(
         true_labels, predictions, average='weighted'
     )
     
-    # Calcular la matriz de confusión
+    # Calculate confusion matrix
     cm = confusion_matrix(true_labels, predictions)
     
-    # Crear mapa de confusión
+    # Create confusion matrix plot
     plt.figure(figsize=(10, 8))
     sns.heatmap(
         cm,
@@ -136,7 +136,7 @@ def evaluate_model(model, test_dataset, test_texts, tokenizer, id_to_label):
     plt.tight_layout()
     plt.savefig('confusion_matrix.png')
     
-    # Crear un DataFrame con las predicciones y confianza
+    # Create DataFrame with predictions and confidence
     results_df = pd.DataFrame({
         'True Label': [id_to_label[label] for label in true_labels],
         'Predicted': [id_to_label[pred] for pred in predictions],
@@ -144,15 +144,15 @@ def evaluate_model(model, test_dataset, test_texts, tokenizer, id_to_label):
         'Correct': [true_labels[i] == predictions[i] for i in range(len(true_labels))]
     })
     
-    # Agrupar por etiqueta real y calcular confianza promedio
+    # Group by true label and calculate average confidence
     avg_confidence = results_df.groupby('True Label')['Confidence'].mean().reset_index()
     
-    # Ordenar las etiquetas por nivel de preocupación
+    # Sort labels by concern level
     order = ['not_concerning', 'mildly_concerning', 'moderately_concerning', 'highly_concerning']
     avg_confidence['True Label'] = pd.Categorical(avg_confidence['True Label'], categories=order, ordered=True)
     avg_confidence = avg_confidence.sort_values('True Label')
     
-    # Crear gráfico de barras
+    # Create bar plot
     plt.figure(figsize=(10, 6))
     sns.barplot(x='True Label', y='Confidence', data=avg_confidence)
     plt.title('Average Confidence Score by Class')
@@ -171,41 +171,41 @@ def evaluate_model(model, test_dataset, test_texts, tokenizer, id_to_label):
         'confidence_scores': results_df
     }
 
-# Función principal
+# Main function
 def main():
-    print(f"Cargando datos desde 'melanoma_data.json'...")
+    print(f"Loading data from 'melanoma_data.json'...")
     texts, label_ids, label_to_id, id_to_label, raw_data = load_data('dataset_answers.json')
     
-    print(f"Dataset cargado con {len(texts)} ejemplos y {len(label_to_id)} clases")
-    print("Etiquetas disponibles:")
+    print(f"Dataset loaded with {len(texts)} examples and {len(label_to_id)} classes")
+    print("Available labels:")
     for label, idx in label_to_id.items():
         print(f"  - {label}: {idx}")
     
-    # Dividir los datos en conjuntos de entrenamiento y prueba
+    # Split data into training and test sets
     train_texts, test_texts, train_labels, test_labels = train_test_split(
         texts, label_ids, test_size=args.test_size, random_state=42, stratify=label_ids
     )
     
-    print(f"Conjunto de entrenamiento: {len(train_texts)} ejemplos")
-    print(f"Conjunto de prueba: {len(test_texts)} ejemplos")
+    print(f"Training set: {len(train_texts)} examples")
+    print(f"Test set: {len(test_texts)} examples")
     
-    # Cargar el tokenizador
-    print(f"Cargando tokenizador para '{args.model_name}'...")
+    # Load tokenizer
+    print(f"Loading tokenizer for '{args.model_name}'...")
     tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     
-    # Crear datasets
+    # Create datasets
     train_dataset = MelanomaDataset(train_texts, train_labels, tokenizer)
     test_dataset = MelanomaDataset(test_texts, test_labels, tokenizer)
     
-    # Cargar el modelo preentrenado
-    print(f"Cargando modelo preentrenado '{args.model_name}'...")
+    # Load pretrained model
+    print(f"Loading pretrained model '{args.model_name}'...")
     
-    # Configuración correcta del mapeo de etiquetas
+    # Correct label mapping configuration
     num_labels = len(label_to_id)
     id2label = {str(i): label for i, label in id_to_label.items()}
     label2id = {label: str(i) for label, i in label_to_id.items()}
     
-    print("Configuración de etiquetas:")
+    print("Label configuration:")
     print("id2label:", id2label)
     print("label2id:", label2id)
     
@@ -214,21 +214,21 @@ def main():
         num_labels=num_labels,
         id2label=id2label,
         label2id=label2id,
-        ignore_mismatched_sizes=True  # Ignorar tamaños de capas no coincidentes
+        ignore_mismatched_sizes=True  # Ignore mismatched layer sizes
     )
     
-    # Evaluar el modelo preentrenado
-    print("Evaluando el modelo preentrenado...")
+    # Evaluate pretrained model
+    print("Evaluating pretrained model...")
     pretrained_results = evaluate_model(pretrained_model, test_dataset, test_texts, tokenizer, id_to_label)
     
-    # Imprimir resultados del modelo preentrenado
-    print("\nResultados del modelo preentrenado:")
-    print(f"Exactitud: {pretrained_results['accuracy']:.4f}")
-    print(f"Precisión: {pretrained_results['precision']:.4f}")
+    # Print pretrained model results
+    print("\nPretrained model results:")
+    print(f"Accuracy: {pretrained_results['accuracy']:.4f}")
+    print(f"Precision: {pretrained_results['precision']:.4f}")
     print(f"Recall: {pretrained_results['recall']:.4f}")
     print(f"F1-Score: {pretrained_results['f1']:.4f}")
     
-    # Definir función para calcular métricas durante el entrenamiento
+    # Define function to compute metrics during training
     def compute_metrics(pred):
         labels = pred.label_ids
         preds = pred.predictions.argmax(-1)
@@ -243,10 +243,10 @@ def main():
             'recall': recall
         }
     
-    # Configurar los argumentos de entrenamiento
-    print(f"Configurando entrenamiento con {args.epochs} épocas y batch size {args.batch_size}...")
+    # Configure training arguments
+    print(f"Setting up training with {args.epochs} epochs and batch size {args.batch_size}...")
     
-    # Crear directorio para resultados si no existe
+    # Create results directory if it doesn't exist
     os.makedirs('./results', exist_ok=True)
     
     training_args = TrainingArguments(
@@ -263,10 +263,10 @@ def main():
         load_best_model_at_end=True,
         metric_for_best_model='f1',
         learning_rate=args.learning_rate,
-        report_to='none',  # Desactivar informes a Weights & Biases, etc.
+        report_to='none',  # Disable reporting to Weights & Biases, etc.
     )
     
-    # Inicializar el entrenador
+    # Initialize trainer
     trainer = Trainer(
         model=pretrained_model,
         args=training_args,
@@ -275,40 +275,40 @@ def main():
         compute_metrics=compute_metrics,
     )
     
-    # Entrenar el modelo
-    print("Iniciando entrenamiento del modelo...")
+    # Train the model
+    print("Starting model training...")
     trainer.train()
     
-    # Guardar el modelo fine-tuneado
-    print(f"Guardando modelo fine-tuneado en '{args.save_path}'...")
+    # Save the fine-tuned model
+    print(f"Saving fine-tuned model to '{args.save_path}'...")
     trainer.save_model(args.save_path)
     tokenizer.save_pretrained(args.save_path)
     
-    # Guardar configuración de etiquetas
+    # Save label configuration
     config_file = os.path.join(args.save_path, "label_config.json")
     with open(config_file, "w") as f:
         json.dump({"id2label": id2label, "label2id": label2id}, f)
     
-    # Evaluar el modelo fine-tuneado
-    print("Evaluando el modelo fine-tuneado...")
+    # Evaluate the fine-tuned model
+    print("Evaluating fine-tuned model...")
     finetuned_model = trainer.model
     finetuned_results = evaluate_model(finetuned_model, test_dataset, test_texts, tokenizer, id_to_label)
     
-    # Imprimir resultados del modelo fine-tuneado
-    print("\nResultados del modelo fine-tuneado:")
-    print(f"Exactitud: {finetuned_results['accuracy']:.4f}")
-    print(f"Precisión: {finetuned_results['precision']:.4f}")
+    # Print fine-tuned model results
+    print("\nFine-tuned model results:")
+    print(f"Accuracy: {finetuned_results['accuracy']:.4f}")
+    print(f"Precision: {finetuned_results['precision']:.4f}")
     print(f"Recall: {finetuned_results['recall']:.4f}")
     print(f"F1-Score: {finetuned_results['f1']:.4f}")
     
-    # Comparar resultados
-    print("\nMejora del modelo fine-tuneado respecto al preentrenado:")
-    print(f"Exactitud: {finetuned_results['accuracy'] - pretrained_results['accuracy']:.4f} (+{(finetuned_results['accuracy'] - pretrained_results['accuracy']) * 100:.1f}%)")
-    print(f"Precisión: {finetuned_results['precision'] - pretrained_results['precision']:.4f} (+{(finetuned_results['precision'] - pretrained_results['precision']) * 100:.1f}%)")
+    # Compare results
+    print("\nFine-tuned model improvement over pretrained:")
+    print(f"Accuracy: {finetuned_results['accuracy'] - pretrained_results['accuracy']:.4f} (+{(finetuned_results['accuracy'] - pretrained_results['accuracy']) * 100:.1f}%)")
+    print(f"Precision: {finetuned_results['precision'] - pretrained_results['precision']:.4f} (+{(finetuned_results['precision'] - pretrained_results['precision']) * 100:.1f}%)")
     print(f"Recall: {finetuned_results['recall'] - pretrained_results['recall']:.4f} (+{(finetuned_results['recall'] - pretrained_results['recall']) * 100:.1f}%)")
     print(f"F1-Score: {finetuned_results['f1'] - pretrained_results['f1']:.4f} (+{(finetuned_results['f1'] - pretrained_results['f1']) * 100:.1f}%)")
     
-    # Guardar resultados
+    # Save results
     results = {
         'pretrained': {
             'accuracy': float(pretrained_results['accuracy']),
@@ -327,9 +327,9 @@ def main():
     with open('model_comparison_results.json', 'w') as f:
         json.dump(results, f, indent=2)
     
-    print("Resultados guardados en 'model_comparison_results.json'")
+    print("Results saved to 'model_comparison_results.json'")
     
-    # Visualizar la comparación
+    # Visualize comparison
     metrics = ['accuracy', 'precision', 'recall', 'f1']
     pretrained_scores = [results['pretrained'][m] for m in metrics]
     finetuned_scores = [results['finetuned'][m] for m in metrics]
@@ -338,30 +338,30 @@ def main():
     x = np.arange(len(metrics))
     width = 0.35
     
-    plt.bar(x - width/2, pretrained_scores, width, label='Preentrenado')
-    plt.bar(x + width/2, finetuned_scores, width, label='Fine-tuneado')
+    plt.bar(x - width/2, pretrained_scores, width, label='Pretrained')
+    plt.bar(x + width/2, finetuned_scores, width, label='Fine-tuned')
     
-    plt.xlabel('Métrica')
-    plt.ylabel('Puntuación')
-    plt.title('Comparación de rendimiento entre modelos')
+    plt.xlabel('Metric')
+    plt.ylabel('Score')
+    plt.title('Model performance comparison')
     plt.xticks(x, metrics)
     plt.ylim(0, 1)
     plt.legend()
     plt.tight_layout()
     
     plt.savefig('model_comparison.png')
-    print("Gráfico de comparación guardado en 'model_comparison.png'")
+    print("Comparison plot saved to 'model_comparison.png'")
     
-    # Guardar ejemplos para referencia en la interfaz
+    # Save examples for interface reference
     sample_examples = {}
     for label in label_to_id.keys():
         examples = [item['text'] for item in raw_data['data'] if item['label'] == label]
-        sample_examples[label] = examples[:5]  # Guardar hasta 5 ejemplos por categoría
+        sample_examples[label] = examples[:5]  # Save up to 5 examples per category
     
     with open('sample_examples.json', 'w') as f:
         json.dump(sample_examples, f, indent=2)
     
-    print("Ejemplos guardados en 'sample_examples.json'")
+    print("Examples saved to 'sample_examples.json'")
 
 if __name__ == "__main__":
     main()
