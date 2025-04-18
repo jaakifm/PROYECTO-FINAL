@@ -9,24 +9,24 @@ import os
 import traceback
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
-# Configuración de la página
+# Page configuration
 st.set_page_config(
-    page_title="Clasificador de Melanoma",
+    page_title="Melanoma Classifier",
     page_icon="🔍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Función para cargar los datos con mejor manejo de errores
+# Function to load data with better error handling
 @st.cache_data
 def load_data():
     try:
-        # Verificar si el archivo existe
+        # Check if file exists
         if not os.path.exists('dataset_answers.json'):
-            # Si no existe, crear datos de muestra
-            st.warning("Archivo 'dataset_answers.json' no encontrado. Creando datos de muestra.")
+            # If not, create sample data
+            st.warning("File 'dataset_answers.json' not found. Creating sample data.")
             
-            # Datos de muestra
+            # Sample data
             sample_data = {
                 "name": "Melanoma Severity Classification",
                 "description": "Training data for melanoma severity classification",
@@ -38,41 +38,41 @@ def load_data():
                 ]
             }
             
-            # Guardar datos de muestra
+            # Save sample data
             with open('melanoma_data.json', 'w') as f:
                 json.dump(sample_data, f, indent=2)
             
             return sample_data
         
-        # Leer el archivo
+        # Read the file
         with open('dataset_answers.json', 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         return data
     except json.JSONDecodeError:
-        st.error("Error al decodificar el archivo JSON. El archivo puede estar corrupto.")
-        # Crear estructura mínima para evitar errores
+        st.error("Error decoding JSON file. The file might be corrupted.")
+        # Create minimal structure to avoid errors
         return {
-            "name": "Error en datos",
-            "description": "No se pudieron cargar los datos correctamente",
+            "name": "Data Error",
+            "description": "Could not load data correctly",
             "data": []
         }
     except Exception as e:
-        st.error(f"Error al cargar los datos: {str(e)}")
+        st.error(f"Error loading data: {str(e)}")
         st.error(traceback.format_exc())
-        # Crear estructura mínima para evitar errores
+        # Create minimal structure to avoid errors
         return {
-            "name": "Error en datos",
-            "description": "No se pudieron cargar los datos correctamente",
+            "name": "Data Error",
+            "description": "Could not load data correctly",
             "data": []
         }
 
-# Función para obtener las etiquetas y sus IDs
+# Function to get labels and their IDs
 @st.cache_data
 def get_labels(data):
     try:
         if not data or "data" not in data or not data["data"]:
-            # Si no hay datos, usar etiquetas por defecto
+            # If no data, use default labels
             default_labels = ["not_concerning", "mildly_concerning", "moderately_concerning", "highly_concerning"]
             label_to_id = {label: idx for idx, label in enumerate(default_labels)}
             id_to_label = {idx: label for idx, label in enumerate(default_labels)}
@@ -81,7 +81,7 @@ def get_labels(data):
         labels = [item["label"] for item in data["data"]]
         unique_labels = sorted(set(labels))
         
-        # Si no hay etiquetas, usar etiquetas por defecto
+        # If no labels, use default labels
         if not unique_labels:
             default_labels = ["not_concerning", "mildly_concerning", "moderately_concerning", "highly_concerning"]
             label_to_id = {label: idx for idx, label in enumerate(default_labels)}
@@ -92,39 +92,39 @@ def get_labels(data):
         id_to_label = {idx: label for idx, label in enumerate(unique_labels)}
         return unique_labels, label_to_id, id_to_label
     except Exception as e:
-        st.error(f"Error al procesar etiquetas: {str(e)}")
-        # Etiquetas por defecto en caso de error
+        st.error(f"Error processing labels: {str(e)}")
+        # Default labels in case of error
         default_labels = ["not_concerning", "mildly_concerning", "moderately_concerning", "highly_concerning"]
         label_to_id = {label: idx for idx, label in enumerate(default_labels)}
         id_to_label = {idx: label for idx, label in enumerate(default_labels)}
         return default_labels, label_to_id, id_to_label
 
-# Función para cargar los modelos y el tokenizador
+# Function to load models and tokenizer
 @st.cache_resource
 def load_models(label_to_id, id_to_label):
     try:
-        # Cargar tokenizador
+        # Load tokenizer
         tokenizer = AutoTokenizer.from_pretrained("rjac/biobert-ICD10-L3-mimic")
         
-        # Configuración correcta de etiquetas
+        # Correct label configuration
         num_labels = len(label_to_id)
         id2label = {str(i): label for i, label in id_to_label.items()}
         label2id = {label: str(i) for label, i in label_to_id.items()}
         
-        # Cargar modelo preentrenado
+        # Load pretrained model
         pretrained_model = AutoModelForSequenceClassification.from_pretrained(
             "rjac/biobert-ICD10-L3-mimic", 
             num_labels=num_labels,
             id2label=id2label,
             label2id=label2id,
-            ignore_mismatched_sizes=True  # Ignorar tamaños de capas no coincidentes
+            ignore_mismatched_sizes=True  # Ignore mismatched layer sizes
         )
         
-        # Cargar modelo fine-tuneado (si existe)
+        # Load fine-tuned model (if exists)
         finetuned_model = None
         if os.path.exists("./finetuned_model"):
             try:
-                # Intentar cargar el modelo con la misma configuración de etiquetas
+                # Try to load model with same label configuration
                 finetuned_model = AutoModelForSequenceClassification.from_pretrained(
                     "./finetuned_model",
                     num_labels=num_labels,
@@ -132,25 +132,25 @@ def load_models(label_to_id, id_to_label):
                     label2id=label2id
                 )
             except Exception as e:
-                st.warning(f"No se pudo cargar el modelo fine-tuneado: {str(e)}")
+                st.warning(f"Could not load fine-tuned model: {str(e)}")
                 finetuned_model = None
         
         return tokenizer, pretrained_model, finetuned_model
     except Exception as e:
-        st.error(f"Error al cargar los modelos: {str(e)}")
+        st.error(f"Error loading models: {str(e)}")
         st.error(traceback.format_exc())
         return None, None, None
 
-# Función para clasificar una respuesta
+# Function to classify a response
 def classify_response(response, model, tokenizer, id_to_label):
     try:
-        # Poner modelo en modo evaluación
+        # Put model in evaluation mode
         model.eval()
         
-        # Tokenizar la entrada
+        # Tokenize input
         inputs = tokenizer(response, return_tensors="pt", padding=True, truncation=True)
         
-        # Realizar predicción
+        # Make prediction
         with torch.no_grad():
             outputs = model(**inputs)
             logits = outputs.logits
@@ -158,52 +158,52 @@ def classify_response(response, model, tokenizer, id_to_label):
             pred_class = torch.argmax(probs, dim=1).item()
             score = probs[0, pred_class].item()
         
-        # Obtener la etiqueta
+        # Get label
         label_name = id_to_label[pred_class]
         
         return label_name, score
     except Exception as e:
-        st.error(f"Error en la clasificación: {str(e)}")
+        st.error(f"Classification error: {str(e)}")
         st.error(traceback.format_exc())
         return "error", 0.0
 
-# Función para visualizar los resultados
+# Function to visualize results
 def visualize_results(pretrained_label, pretrained_score, finetuned_label=None, finetuned_score=None):
-    # Definir el mapeo de colores
+    # Define color mapping
     color_map = {
-        'not_concerning': '#4CAF50',  # Verde
-        'mildly_concerning': '#FFEB3B',  # Amarillo
-        'moderately_concerning': '#FF9800',  # Naranja
-        'highly_concerning': '#F44336',   # Rojo
-        'error': '#9E9E9E'  # Gris para errores
+        'not_concerning': '#4CAF50',  # Green
+        'mildly_concerning': '#FFEB3B',  # Yellow
+        'moderately_concerning': '#FF9800',  # Orange
+        'highly_concerning': '#F44336',   # Red
+        'error': '#9E9E9E'  # Gray for errors
     }
     
-    # Crear datos para visualización
-    models = ['Preentrenado']
+    # Create data for visualization
+    models = ['Pretrained']
     scores = [pretrained_score]
     labels = [pretrained_label]
     colors = [color_map.get(pretrained_label, '#9E9E9E')]
     
     if finetuned_label is not None and finetuned_score is not None:
-        models.append('Fine-tuneado')
+        models.append('Fine-tuned')
         scores.append(finetuned_score)
         labels.append(finetuned_label)
         colors.append(color_map.get(finetuned_label, '#9E9E9E'))
     
-    # Crear el dataframe
+    # Create dataframe
     chart_data = pd.DataFrame({
-        'Modelo': models,
-        'Confianza': scores,
-        'Clasificación': labels
+        'Model': models,
+        'Confidence': scores,
+        'Classification': labels
     })
     
-    # Crear un gráfico de barras
+    # Create bar plot
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Versión actualizada de barplot
-    bars = sns.barplot(x='Modelo', y='Confianza', hue='Modelo', data=chart_data, ax=ax, palette=colors, legend=False)
+    # Updated barplot version
+    bars = sns.barplot(x='Model', y='Confidence', hue='Model', data=chart_data, ax=ax, palette=colors, legend=False)
     
-    # Añadir etiquetas con la clasificación
+    # Add classification labels
     for i, bar in enumerate(bars.patches):
         ax.text(
             bar.get_x() + bar.get_width()/2,
@@ -214,15 +214,15 @@ def visualize_results(pretrained_label, pretrained_score, finetuned_label=None, 
             fontsize=12
         )
     
-    plt.title('Comparación de confianza y clasificación entre modelos', fontsize=14)
+    plt.title('Comparison of confidence and classification between models', fontsize=14)
     plt.ylim(0, 1.1)
-    plt.ylabel('Confianza')
-    plt.xlabel('Modelo')
+    plt.ylabel('Confidence')
+    plt.xlabel('Model')
     
-    # Mostrar el gráfico
+    # Show plot
     st.pyplot(fig)
 
-# Lista de preguntas
+# List of questions
 questions = [
     # Growth and Evolution (E in ABCDE)
     "Has the lesion grown or changed in size in recent months?",
@@ -248,31 +248,31 @@ questions = [
     "Do you have fair skin that burns easily in the sun?"
 ]
 
-# Función principal
+# Main function
 def main():
-    # Título y descripción
-    st.title("Clasificador de Severidad de Melanoma")
+    # Title and description
+    st.title("Melanoma Severity Classifier")
     st.write("""
-    Esta aplicación utiliza modelos de transformers para clasificar respuestas sobre lesiones de piel
-    y evaluar el posible riesgo de melanoma. Compara un modelo preentrenado (BioBERT) con un modelo
-    fine-tuneado específicamente para este caso de uso.
+    This application uses transformer models to classify responses about skin lesions
+    and evaluate potential melanoma risk. It compares a pretrained model (BioBERT) with a
+    fine-tuned model specifically for this use case.
     """)
     
-    # Cargar datos
+    # Load data
     data = load_data()
     
     if not data or "data" not in data or not data["data"]:
-        st.error("No hay datos disponibles para el análisis.")
+        st.error("No data available for analysis.")
         return
     
     unique_labels, label_to_id, id_to_label = get_labels(data)
     
-    # Sidebar con información del dataset
-    st.sidebar.title("Información del Dataset")
-    st.sidebar.write(f"Nombre del dataset: {data.get('name', 'Desconocido')}")
-    st.sidebar.write(f"Total de ejemplos: {len(data.get('data', []))}")
+    # Sidebar with dataset information
+    st.sidebar.title("Dataset Information")
+    st.sidebar.write(f"Dataset name: {data.get('name', 'Unknown')}")
+    st.sidebar.write(f"Total examples: {len(data.get('data', []))}")
     
-    # Mostrar distribución de etiquetas
+    # Show label distribution
     label_counts = {}
     for item in data.get("data", []):
         if "label" in item:
@@ -281,203 +281,203 @@ def main():
             label_counts[item["label"]] += 1
     
     if label_counts:
-        st.sidebar.subheader("Distribución de etiquetas")
+        st.sidebar.subheader("Label Distribution")
         
-        # Crear un DataFrame para la distribución
+        # Create DataFrame for distribution
         dist_data = pd.DataFrame({
-            'Etiqueta': list(label_counts.keys()),
-            'Cantidad': list(label_counts.values())
+            'Label': list(label_counts.keys()),
+            'Count': list(label_counts.values())
         })
         
-        # Ordenar las etiquetas por nivel de preocupación
+        # Sort labels by concern level
         order = ['not_concerning', 'mildly_concerning', 'moderately_concerning', 'highly_concerning']
-        if all(label in order for label in dist_data['Etiqueta']):
-            dist_data['Etiqueta'] = pd.Categorical(dist_data['Etiqueta'], categories=order, ordered=True)
-            dist_data = dist_data.sort_values('Etiqueta')
+        if all(label in order for label in dist_data['Label']):
+            dist_data['Label'] = pd.Categorical(dist_data['Label'], categories=order, ordered=True)
+            dist_data = dist_data.sort_values('Label')
         
-        # Definir colores para las etiquetas
+        # Define colors for labels
         colors = {
-            'not_concerning': '#4CAF50',  # Verde
-            'mildly_concerning': '#FFEB3B',  # Amarillo
-            'moderately_concerning': '#FF9800',  # Naranja
-            'highly_concerning': '#F44336'   # Rojo
+            'not_concerning': '#4CAF50',  # Green
+            'mildly_concerning': '#FFEB3B',  # Yellow
+            'moderately_concerning': '#FF9800',  # Orange
+            'highly_concerning': '#F44336'   # Red
         }
         
-        bar_colors = [colors.get(label, '#9E9E9E') for label in dist_data['Etiqueta']]
+        bar_colors = [colors.get(label, '#9E9E9E') for label in dist_data['Label']]
         
-        # Crear gráfico de barras
+        # Create bar plot
         fig, ax = plt.subplots(figsize=(8, 4))
         
-        # Versión actualizada del barplot
-        bars = sns.barplot(x='Etiqueta', y='Cantidad', hue='Etiqueta', data=dist_data, palette=bar_colors, ax=ax, legend=False)
+        # Updated barplot version
+        bars = sns.barplot(x='Label', y='Count', hue='Label', data=dist_data, palette=bar_colors, ax=ax, legend=False)
         
-        # Establecer ticks antes de cambiar las etiquetas
+        # Set ticks before changing labels
         plt.xticks(range(len(dist_data)))
-        ax.set_xticklabels([label.replace('_', ' ').title() for label in dist_data['Etiqueta']])
+        ax.set_xticklabels([label.replace('_', ' ').title() for label in dist_data['Label']])
         
-        # Rotar etiquetas
+        # Rotate labels
         plt.xticks(rotation=45)
         
         plt.tight_layout()
         st.sidebar.pyplot(fig)
     
-    # Cargar modelos
+    # Load models
     tokenizer, pretrained_model, finetuned_model = load_models(label_to_id, id_to_label)
     
     if tokenizer and pretrained_model:
-        # Crear pestañas para diferentes secciones
-        tab1, tab2, tab3 = st.tabs(["Clasificación Individual", "Comparación de Modelos", "Ejemplos del Dataset"])
+        # Create tabs for different sections
+        tab1, tab2, tab3 = st.tabs(["Single Classification", "Model Comparison", "Dataset Examples"])
         
         with tab1:
-            st.header("Clasificación de Respuestas")
+            st.header("Response Classification")
             
-            # Seleccionar una pregunta
-            selected_question = st.selectbox("Selecciona una pregunta:", questions)
+            # Select a question
+            selected_question = st.selectbox("Select a question:", questions)
             
-            # Entrada de respuesta
-            user_response = st.text_input("Tu respuesta:", "")
+            # Response input
+            user_response = st.text_input("Your response:", "")
             
-            if st.button("Clasificar respuesta") and user_response:
-                # Clasificar con el modelo preentrenado
+            if st.button("Classify response") and user_response:
+                # Classify with pretrained model
                 pretrained_label, pretrained_score = classify_response(
                     user_response, pretrained_model, tokenizer, id_to_label
                 )
                 
-                # Mostrar resultados
-                st.subheader("Resultados de la clasificación")
+                # Show results
+                st.subheader("Classification Results")
                 
-                # Modelo preentrenado
-                st.write("**Modelo preentrenado (BioBERT):**")
-                st.write(f"Clasificación: {pretrained_label.replace('_', ' ').title()}")
-                st.write(f"Confianza: {pretrained_score:.4f}")
+                # Pretrained model
+                st.write("**Pretrained model (BioBERT):**")
+                st.write(f"Classification: {pretrained_label.replace('_', ' ').title()}")
+                st.write(f"Confidence: {pretrained_score:.4f}")
                 
-                # Si existe el modelo fine-tuneado
+                # If fine-tuned model exists
                 if finetuned_model:
-                    # Clasificar con el modelo fine-tuneado
+                    # Classify with fine-tuned model
                     finetuned_label, finetuned_score = classify_response(
                         user_response, finetuned_model, tokenizer, id_to_label
                     )
                     
-                    # Modelo fine-tuneado
-                    st.write("**Modelo fine-tuneado:**")
-                    st.write(f"Clasificación: {finetuned_label.replace('_', ' ').title()}")
-                    st.write(f"Confianza: {finetuned_score:.4f}")
+                    # Fine-tuned model
+                    st.write("**Fine-tuned model:**")
+                    st.write(f"Classification: {finetuned_label.replace('_', ' ').title()}")
+                    st.write(f"Confidence: {finetuned_score:.4f}")
                     
-                    # Visualizar resultados
+                    # Visualize results
                     visualize_results(pretrained_label, pretrained_score, finetuned_label, finetuned_score)
                 else:
-                    # Solo visualizar el modelo preentrenado
+                    # Only visualize pretrained model
                     visualize_results(pretrained_label, pretrained_score)
                 
-                # Explicación de la clasificación
-                st.subheader("Interpretación de resultados")
+                # Classification explanation
+                st.subheader("Results Interpretation")
                 
                 concern_explanations = {
                     'not_concerning': """
-                    **No preocupante**: No hay signos de alarma detectados en esta respuesta. 
-                    Sin embargo, es importante mantener un seguimiento regular de cualquier cambio en la lesión.
+                    **Not concerning**: No warning signs detected in this response. 
+                    However, it's important to regularly monitor any changes in the lesion.
                     """,
                     'mildly_concerning': """
-                    **Levemente preocupante**: Se detectan algunos signos leves que merecen seguimiento. 
-                    Se recomienda observar la lesión periódicamente y consultar a un dermatólogo 
-                    si se observan cambios adicionales.
+                    **Mildly concerning**: Some mild signs detected that warrant follow-up. 
+                    It's recommended to periodically observe the lesion and consult a dermatologist 
+                    if additional changes are noticed.
                     """,
                     'moderately_concerning': """
-                    **Moderadamente preocupante**: Se detectan signos que requieren evaluación médica. 
-                    Se recomienda programar una consulta con un dermatólogo en las próximas semanas
-                    para una evaluación profesional.
+                    **Moderately concerning**: Signs detected that require medical evaluation. 
+                    It's recommended to schedule an appointment with a dermatologist in the coming weeks
+                    for a professional assessment.
                     """,
                     'highly_concerning': """
-                    **Altamente preocupante**: Se detectan signos serios que requieren atención médica inmediata. 
-                    Se recomienda consultar a un dermatólogo lo antes posible para una evaluación completa
-                    y posible biopsia.
+                    **Highly concerning**: Serious signs detected that require immediate medical attention. 
+                    It's recommended to consult a dermatologist as soon as possible for a complete evaluation
+                    and possible biopsy.
                     """
                 }
                 
-                # Mostrar la explicación del modelo preentrenado
+                # Show explanation for pretrained model
                 st.markdown(concern_explanations.get(pretrained_label, ""))
                 
-                # Mostrar advertencia
+                # Show warning
                 st.warning("""
-                **Nota importante**: Esta clasificación es solo una herramienta de ayuda y no sustituye 
-                el diagnóstico médico profesional. Siempre consulte a un dermatólogo para una evaluación adecuada.
+                **Important note**: This classification is only an aid tool and does not substitute 
+                professional medical diagnosis. Always consult a dermatologist for proper evaluation.
                 """)
         
         with tab2:
-            st.header("Comparación de Modelos")
+            st.header("Model Comparison")
             
-            # Cargar métricas de comparación si existen
+            # Load comparison metrics if they exist
             comparison_file = 'model_comparison_results.json'
             if os.path.exists(comparison_file):
                 try:
                     with open(comparison_file, 'r') as f:
                         metrics_data = json.load(f)
                     
-                    # Métricas comparativas
+                    # Comparative metrics
                     if finetuned_model:
                         metrics = {
-                            'Exactitud': [metrics_data['pretrained']['accuracy'], metrics_data['finetuned']['accuracy']],
-                            'Precisión': [metrics_data['pretrained']['precision'], metrics_data['finetuned']['precision']],
+                            'Accuracy': [metrics_data['pretrained']['accuracy'], metrics_data['finetuned']['accuracy']],
+                            'Precision': [metrics_data['pretrained']['precision'], metrics_data['finetuned']['precision']],
                             'Recall': [metrics_data['pretrained']['recall'], metrics_data['finetuned']['recall']],
                             'F1-Score': [metrics_data['pretrained']['f1'], metrics_data['finetuned']['f1']]
                         }
                         
-                        metrics_df = pd.DataFrame(metrics, index=['Modelo preentrenado', 'Modelo fine-tuneado'])
+                        metrics_df = pd.DataFrame(metrics, index=['Pretrained model', 'Fine-tuned model'])
                         
-                        # Mostrar tabla de métricas
-                        st.subheader("Métricas de rendimiento")
+                        # Show metrics table
+                        st.subheader("Performance Metrics")
                         st.table(metrics_df)
                         
-                        # Visualización de métricas
-                        st.subheader("Visualización de métricas:")
+                        # Metrics visualization
+                        st.subheader("Metrics Visualization:")
                         
                         fig, ax = plt.subplots(figsize=(10, 6))
                         metrics_df.T.plot(kind='bar', ax=ax)
-                        plt.title('Comparación de métricas entre modelos')
+                        plt.title('Model metrics comparison')
                         plt.ylim(0, 1)
-                        plt.ylabel('Puntuación')
-                        plt.xlabel('Métrica')
-                        plt.legend(title='Modelo')
+                        plt.ylabel('Score')
+                        plt.xlabel('Metric')
+                        plt.legend(title='Model')
                         
                         st.pyplot(fig)
                         
-                        # Explicación de mejoras
-                        st.subheader("Análisis de mejoras")
+                        # Improvements explanation
+                        st.subheader("Improvement Analysis")
                         
-                        # Calcular porcentajes de mejora
+                        # Calculate improvement percentages
                         accuracy_improvement = (metrics_data['finetuned']['accuracy'] - metrics_data['pretrained']['accuracy']) * 100
                         precision_improvement = (metrics_data['finetuned']['precision'] - metrics_data['pretrained']['precision']) * 100
                         recall_improvement = (metrics_data['finetuned']['recall'] - metrics_data['pretrained']['recall']) * 100
                         f1_improvement = (metrics_data['finetuned']['f1'] - metrics_data['pretrained']['f1']) * 100
                         
                         st.write(f"""
-                        El modelo fine-tuneado muestra mejoras en todas las métricas evaluadas:
+                        The fine-tuned model shows improvements in all evaluated metrics:
                         
-                        - **Exactitud**: Incremento del {accuracy_improvement:.1f}% en la clasificación correcta de todas las respuestas.
-                        - **Precisión**: Mejora del {precision_improvement:.1f}% en la identificación precisa de casos positivos.
-                        - **Recall**: Aumento del {recall_improvement:.1f}% en la capacidad de identificar todos los casos positivos.
-                        - **F1-Score**: Mejora del {f1_improvement:.1f}% en la media armónica entre precisión y recall.
+                        - **Accuracy**: {accuracy_improvement:.1f}% increase in correctly classifying all responses.
+                        - **Precision**: {precision_improvement:.1f}% improvement in accurately identifying positive cases.
+                        - **Recall**: {recall_improvement:.1f}% increase in ability to identify all positive cases.
+                        - **F1-Score**: {f1_improvement:.1f}% improvement in harmonic mean between precision and recall.
                         
-                        Estas mejoras demuestran el valor del fine-tuning específico para el dominio de melanoma
-                        comparado con el modelo base preentrenado BioBERT.
+                        These improvements demonstrate the value of domain-specific fine-tuning for melanoma
+                        compared to the base BioBERT pretrained model.
                         """)
                     else:
-                        st.info("El modelo fine-tuneado no está disponible para comparación.")
+                        st.info("Fine-tuned model not available for comparison.")
                 except Exception as e:
-                    st.error(f"Error al cargar las métricas de comparación: {str(e)}")
+                    st.error(f"Error loading comparison metrics: {str(e)}")
                     st.error(traceback.format_exc())
             else:
-                st.info("No hay datos comparativos disponibles. Ejecuta primero el entrenamiento y evaluación de modelos.")
+                st.info("No comparative data available. Run model training and evaluation first.")
         
         with tab3:
-            st.header("Ejemplos del Dataset")
+            st.header("Dataset Examples")
             
-            # Verificar si hay datos para mostrar
+            # Check if there's data to show
             if data and "data" in data and data["data"]:
-                # Mostrar ejemplos para cada categoría
-                st.subheader("Ejemplos por categoría")
+                # Show examples for each category
+                st.subheader("Examples by Category")
                 
-                # Crear un diccionario de ejemplos por etiqueta
+                # Create dictionary of examples by label
                 examples_by_label = {}
                 for item in data["data"]:
                     if "label" in item and "text" in item:
@@ -485,24 +485,24 @@ def main():
                             examples_by_label[item["label"]] = []
                         examples_by_label[item["label"]].append(item["text"])
                 
-                # Mostrar ejemplos por categoría
+                # Show examples by category
                 for label in unique_labels:
-                    # Obtener ejemplos para esta etiqueta
+                    # Get examples for this label
                     examples = examples_by_label.get(label, [])
-                    # Mostrar hasta 5 ejemplos
+                    # Show up to 5 examples
                     example_list = examples[:5]
                     
-                    # Crear expander para cada categoría
-                    with st.expander(f"{label.replace('_', ' ').title()} ({len(examples)} ejemplos)"):
+                    # Create expander for each category
+                    with st.expander(f"{label.replace('_', ' ').title()} ({len(examples)} examples)"):
                         if example_list:
                             for i, example in enumerate(example_list):
                                 st.write(f"{i+1}. \"{example}\"")
                         else:
-                            st.write("No hay ejemplos disponibles para esta categoría.")
+                            st.write("No examples available for this category.")
             else:
-                st.warning("No hay ejemplos disponibles en el dataset.")
+                st.warning("No examples available in the dataset.")
     else:
-        st.error("No se pudieron cargar los modelos. Por favor, verifica la instalación.")
+        st.error("Could not load models. Please verify installation.")
 
 if __name__ == "__main__":
     main()
