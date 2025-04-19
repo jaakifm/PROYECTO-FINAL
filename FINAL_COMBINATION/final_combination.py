@@ -435,6 +435,11 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
         'error': '#9E9E9E'  # Gray for errors
     }
     
+    # Ensure all labels are strings and handle None values
+    text_label = str(text_label) if text_label is not None else "error"
+    image_label = str(image_label) if image_label is not None else "error"
+    combined_label = str(combined_label) if combined_label is not None else "error"
+    
     # Create data for visualization
     models = ['Resultados del Cuestionario', 'Análisis de Imagen', 'Diagnóstico Combinado']
     scores = [text_score, image_score, combined_score]
@@ -452,19 +457,31 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Create barplot
-    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax, palette=colors)
+    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax, palette=colors, hue='Clasificación')
     
-    # Add classification labels
+    # Add classification labels - with safety checks
     for i, bar in enumerate(bars.patches):
-        label_text = labels[i].replace('_', ' ').title()
-        ax.text(
-            bar.get_x() + bar.get_width() / 2,
-            bar.get_height() + 0.02,
-            label_text,
-            ha='center',
-            va='bottom',
-            fontsize=12
-        )
+        if i < len(labels):  # Ensure we don't go out of bounds
+            try:
+                label_text = labels[i].replace('_', ' ').title()
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.02,
+                    label_text,
+                    ha='center',
+                    va='bottom',
+                    fontsize=12
+                )
+            except (AttributeError, IndexError):
+                # If there's any issue with label formatting, use a safe default
+                ax.text(
+                    bar.get_x() + bar.get_width() / 2,
+                    bar.get_height() + 0.02,
+                    "Unknown",
+                    ha='center',
+                    va='bottom',
+                    fontsize=12
+                )
     
     ax.set_title('Confianza por método de diagnóstico', fontsize=14)
     ax.set_ylim(0, 1.1)
@@ -498,7 +515,7 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     
     # Create the gauge background
     for i in range(len(severity_positions)-1):
-        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i+1], alpha=0.3)
+        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i], alpha=0.3)
     
     # Plot the gauge needle
     ax.arrow(position, 0.5, 0, -0.15, head_width=0.03, head_length=0.1, fc='black', ec='black', linewidth=2)
@@ -588,7 +605,7 @@ def main():
         st.warning("Uno o más modelos no pudieron cargarse. Algunas funcionalidades pueden estar limitadas.")
     
     # Create tabs for different sections
-    tab1, tab2, tab3 = st.tabs(["Cuestionario y Diagnóstico", "Historial", "Información"])
+    tab1, tab2 = st.tabs(["Cuestionario y Diagnóstico", "Resultados"])
     
     with tab1:
         # Store the state of the app
