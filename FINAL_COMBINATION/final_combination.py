@@ -448,18 +448,17 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
         'Clasificación': labels
     })
     
-    # Create layout with 2 subplots: bar chart and pie chart
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    # Create a bar chart for confidence levels
+    fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Create barplot on first subplot
-    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax1, 
-                     palette=colors, hue='Modelo', legend=False)
+    # Create barplot
+    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax, palette=colors)
     
     # Add classification labels
     for i, bar in enumerate(bars.patches):
         label_text = labels[i].replace('_', ' ').title()
-        ax1.text(
-            bar.get_x() + bar.get_width()/2,
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 0.02,
             label_text,
             ha='center',
@@ -467,47 +466,10 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
             fontsize=12
         )
     
-    ax1.set_title('Confianza por método de diagnóstico', fontsize=14)
-    ax1.set_ylim(0, 1.1)
-    ax1.set_ylabel('Nivel de Confianza')
-    ax1.set_xlabel('Método de Análisis')
-    
-    # Create pie chart for risk distribution on second subplot
-    # Normalize and create risk data based on combined result
-    risk_labels = ['No preocupante', 'Levemente preocupante', 'Moderadamente preocupante', 'Altamente preocupante']
-    
-    if combined_label == 'not_concerning':
-        risk_values = [0.85, 0.15, 0.0, 0.0]
-    elif combined_label == 'mildly_concerning':
-        risk_values = [0.25, 0.65, 0.1, 0.0]
-    elif combined_label == 'moderately_concerning':
-        risk_values = [0.0, 0.2, 0.7, 0.1]
-    elif combined_label == 'highly_concerning':
-        risk_values = [0.0, 0.0, 0.3, 0.7]
-    else:
-        risk_values = [0.25, 0.25, 0.25, 0.25]  # Equal distribution for error
-    
-    risk_colors = ['#4CAF50', '#FFEB3B', '#FF9800', '#F44336']
-    
-    # Create pie chart
-    wedges, texts, autotexts = ax2.pie(
-        risk_values, 
-        labels=risk_labels, 
-        autopct='%1.1f%%',
-        colors=risk_colors,
-        startangle=90,
-        explode=(0.05, 0.05, 0.05, 0.05),
-        wedgeprops={'linewidth': 2, 'edgecolor': 'white'}
-    )
-    
-    # Styling pie chart text
-    for text in texts:
-        text.set_fontsize(10)
-    for autotext in autotexts:
-        autotext.set_fontsize(9)
-        autotext.set_color('white')
-    
-    ax2.set_title('Distribución de Riesgo', fontsize=14)
+    ax.set_title('Confianza por método de diagnóstico', fontsize=14)
+    ax.set_ylim(0, 1.1)
+    ax.set_ylabel('Nivel de Confianza')
+    ax.set_xlabel('Método de Análisis')
     
     plt.tight_layout()
     
@@ -536,7 +498,7 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     
     # Create the gauge background
     for i in range(len(severity_positions)-1):
-        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i], alpha=0.3)
+        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i+1], alpha=0.3)
     
     # Plot the gauge needle
     ax.arrow(position, 0.5, 0, -0.15, head_width=0.03, head_length=0.1, fc='black', ec='black', linewidth=2)
