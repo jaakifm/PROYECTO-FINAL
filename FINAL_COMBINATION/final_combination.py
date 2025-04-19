@@ -131,8 +131,8 @@ def load_text_model():
         
         # Define label mapping (needed for model loading)
         num_labels = 4
-        id2label = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "higly_concerning"}
-        label2id = {"not_concerning": 0, "mildly_concerning": 1, "moderately_concerning": 2, "higly_concerning": 3}
+        id2label = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "highly_concerning"}
+        label2id = {"not_concerning": 0, "mildly_concerning": 1, "moderately_concerning": 2, "highly_concerning": 3}
         
         # Path alternatives to try
         paths_to_try = [
@@ -240,7 +240,7 @@ def analyze_responses(responses, tokenizer, model, device):
         # Process with the model
         with torch.no_grad():
             outputs = model(**inputs)
-            predictions = torch.softmax(outputs.logits, dim=1)
+            predictions = torch.softmax(outputs.logits, dim=1) 
             
         # We assume the model returns the risk probability (0: low, 1: high)
         risk_score = predictions[0][1].item()  # Probability of high risk
@@ -262,15 +262,25 @@ def analyze_image(image, model, transform, device):
         # Process with the model
         with torch.no_grad():
             outputs = model(image_tensor)
-            predictions = torch.softmax(outputs, dim=1)
             
-        # We assume the model returns the melanoma probability (0: benign, 1: malignant)
-        melanoma_probability = predictions[0][1].item()
+            # Check the output shape to handle it correctly
+            if outputs.shape[1] == 1:
+                # Model returns a single value (binary classification with 1 output neuron)
+                # Apply sigmoid for probability
+                predictions = torch.sigmoid(outputs)
+                melanoma_probability = predictions.item()  # Extract the single value
+            else:
+                # Model returns multiple classes (e.g., 2 output neurons for binary)
+                # Apply softmax for probability distribution
+                predictions = torch.softmax(outputs, dim=1)
+                melanoma_probability = predictions[0][1].item()  # Get probability of positive class
         
         return melanoma_probability
     except Exception as e:
         st.error(f"Error analyzing image: {e}")
-        return 0.5  # Neutral value in case of error
+        import traceback
+        st.error(traceback.format_exc())
+        return 0.5 
 
 # Function to combine results and get final diagnosis
 def get_combined_diagnosis(text_score, image_score):
@@ -428,7 +438,7 @@ def main():
                 chart_data, 
                 x='Category', 
                 y='Value',
-                color=['#FF9999', '#99CCFF', '#99FF99']
+                
             )
             
             # Important warning
