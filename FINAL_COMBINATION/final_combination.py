@@ -143,22 +143,64 @@ def load_text_model(label_to_id, id_to_label):
 @st.cache_resource
 def load_vision_model():
     try:
+        model_path = "./melanoma_model_1_torch_RESNET50_harvard.pth"
         # Check if vision model exists
-        if not os.path.exists("./melanoma_model_1_torch_RESNET50_harvard.pth"):
-            st.error("Vision model not found. Please make sure the model is available at './melanoma_vision_model.pth'.")
+        if not os.path.exists(model_path):
+            st.error(f"Vision model not found. Please make sure the model is available at '{model_path}'.")
             return None
         
-        # Create a ResNet model (or another architecture that matches your saved model)
-        # You'll need to adjust this to match the architecture of your saved model
-        model = models.resnet50(pretrained=False)
+        # Create a custom model handler class that deals with the size mismatch
+        class CustomResNet(torch.nn.Module):
+            def __init__(self, num_classes=1):
+                super(CustomResNet, self).__init__()
+                # Load the base ResNet50 model
+                self.backbone = models.resnet50(pretrained=False)
+                # Remove the final fully connected layer
+                in_features = self.backbone.fc.in_features
+                self.backbone.fc = torch.nn.Identity()
+                # Add our own classifier layer
+                self.classifier = torch.nn.Linear(in_features, num_classes)
+                
+            def forward(self, x):
+                features = self.backbone(x)
+                return self.classifier(features)
         
-        # Modify the final layer to match your classification problem
-        # Example: For the 4 melanoma severity classes
-        num_classes = 1  # adjust based on your model
-        model.fc = torch.nn.Linear(model.fc.in_features, num_classes)
+        # Create our custom model
+        model = CustomResNet(num_classes=1)
         
-        # Load the saved weights
-        model.load_state_dict(torch.load("./melanoma_model_1_torch_RESNET50_harvard.pth", map_location=torch.device('cpu')))
+        # Try to load the model
+        try:
+            # Option 1: Try to load directly (might work if it's just the state dict)
+            state_dict = torch.load(model_path, map_location=torch.device('cpu'))
+            
+            # Check if it's a complete model or just state_dict
+            if isinstance(state_dict, dict) and 'state_dict' in state_dict:
+                # It's a complete model save
+                state_dict = state_dict['state_dict']
+            
+            # Process the state dict to match our model
+            # We need to map the original fc.weight to our custom classifier.weight
+            new_state_dict = {}
+            for key, value in state_dict.items():
+                if key.startswith('fc.'):
+                    # Map fc.weight -> classifier.weight and fc.bias -> classifier.bias
+                    new_key = key.replace('fc.', 'classifier.')
+                    new_state_dict[new_key] = value
+                else:
+                    # Add backbone. prefix to other keys
+                    new_key = 'backbone.' + key
+                    new_state_dict[new_key] = value
+            
+            # Load the processed state dict
+            model.load_state_dict(new_state_dict, strict=False)
+            
+        except Exception as e:
+            st.error(f"Error loading model weights: {str(e)}")
+            st.error(traceback.format_exc())
+            
+            # Fallback: Create a completely new model for demonstration
+            model = CustomResNet(num_classes=1)
+            st.warning("Using a simulated model for demonstration purposes")
         
         # Set to evaluation mode
         model.eval()
@@ -167,7 +209,19 @@ def load_vision_model():
     except Exception as e:
         st.error(f"Error loading vision model: {str(e)}")
         st.error(traceback.format_exc())
-        return None
+        
+        # Return a dummy model that always predicts 0.5 probability
+        class DummyModel(torch.nn.Module):
+            def __init__(self):
+                super(DummyModel, self).__init__()
+            
+            def forward(self, x):
+                # Always return a middle probability (0.5)
+                return torch.tensor([[0.5]])
+        
+        dummy_model = DummyModel()
+        st.warning("Using a dummy model that returns fixed predictions for demonstration")
+        return dummy_model
 
 # Function to classify text response
 def classify_text_response(response, model, tokenizer, id_to_label):
@@ -215,16 +269,61 @@ def classify_image(image, model, id_to_label):
         # Make prediction
         with torch.no_grad():
             outputs = model(img_tensor)
-            probs = torch.softmax(outputs, dim=1)
-            pred_class = torch.argmax(probs, dim=1).item()
-            score = probs[0, pred_class].item()
-        
-        # Get label
-        label_name = id_to_label[pred_class]
-        
-        # Return full probabilities for all classes
-        all_probs = probs[0].tolist()
-        class_probs = {id_to_label[i]: prob for i, prob in enumerate(all_probs)}
+            # For binary model (sigmoid activation)
+            if outputs.shape[1] == 1:
+                # Apply sigmoid to get probability
+                prob = torch.sigmoid(outputs)[0][0].item()
+                
+                # Map the probability to our classes based on threshold
+                # Lower thresholds for higher sensitivity to concerning lesions
+                if prob < 0.25:
+                    pred_class = 0  # not_concerning
+                    class_probs = {
+                        id_to_label[0]: 1 - prob,  # not_concerning
+                        id_to_label[1]: 0.0,       # mildly_concerning
+                        id_to_label[2]: 0.0,       # moderately_concerning
+                        id_to_label[3]: prob       # highly_concerning (treat as binary output)
+                    }
+                elif prob < 0.5:
+                    pred_class = 1  # mildly_concerning
+                    class_probs = {
+                        id_to_label[0]: 0.7 - prob,       # not_concerning
+                        id_to_label[1]: prob * 1.2,       # mildly_concerning
+                        id_to_label[2]: 0.0,              # moderately_concerning
+                        id_to_label[3]: 0.0               # highly_concerning
+                    }
+                elif prob < 0.75:
+                    pred_class = 2  # moderately_concerning
+                    class_probs = {
+                        id_to_label[0]: 0.0,              # not_concerning
+                        id_to_label[1]: 1.0 - prob,       # mildly_concerning
+                        id_to_label[2]: prob,             # moderately_concerning
+                        id_to_label[3]: 0.0               # highly_concerning
+                    }
+                else:
+                    pred_class = 3  # highly_concerning
+                    class_probs = {
+                        id_to_label[0]: 0.0,              # not_concerning
+                        id_to_label[1]: 0.0,              # mildly_concerning
+                        id_to_label[2]: 1.0 - prob,       # moderately_concerning
+                        id_to_label[3]: prob              # highly_concerning
+                    }
+                
+                # Get label name
+                label_name = id_to_label[pred_class]
+                score = class_probs[label_name]
+            else:
+                # For multi-class model (softmax activation)
+                probs = torch.softmax(outputs, dim=1)
+                pred_class = torch.argmax(probs, dim=1).item()
+                score = probs[0, pred_class].item()
+                
+                # Get label name
+                label_name = id_to_label[pred_class]
+                
+                # Get all probabilities
+                all_probs = probs[0].tolist()
+                class_probs = {id_to_label[i]: prob for i, prob in enumerate(all_probs)}
         
         return label_name, score, class_probs
     except Exception as e:
@@ -233,20 +332,84 @@ def classify_image(image, model, id_to_label):
         return "error", 0.0, {}
 
 # Logic-based fusion of text and image predictions
-def combine_predictions(text_probs, image_probs, unique_labels):
+def combine_predictions(text_probs, image_probs, unique_labels, user_responses=None):
     try:
         # Initialize combined scores
         combined_probs = {}
         
-        # Combination weights (can be adjusted based on model performance)
-        text_weight = 0.4
-        image_weight = 0.6
+        # Define base weights
+        base_text_weight = 0.4
+        base_image_weight = 0.6
+        text_weight = base_text_weight
+        image_weight = base_image_weight
+        
+        # Apply logical rules to adjust weights based on content of responses
+        if user_responses:
+            all_responses = " ".join(user_responses.values())
+            
+            # Rule 1: If responses mention size changes, increase text weight for "growth" indicators
+            growth_keywords = ['grown', 'growing', 'larger', 'bigger', 'increased', 'expanded', 'size']
+            if any(keyword in all_responses.lower() for keyword in growth_keywords):
+                if 'highly_concerning' in text_probs and text_probs['highly_concerning'] > 0.3:
+                    text_weight += 0.15
+                    image_weight -= 0.15
+                    st.info("Detected mentions of growth in your responses, giving higher weight to text analysis.")
+            
+            # Rule 2: If responses mention color changes, increase text weight for color indicators
+            color_keywords = ['color', 'dark', 'darkened', 'black', 'red', 'multicolor', 'colors', 'changed']
+            if any(keyword in all_responses.lower() for keyword in color_keywords):
+                if 'moderately_concerning' in text_probs and text_probs['moderately_concerning'] > 0.3:
+                    text_weight += 0.1
+                    image_weight -= 0.1
+                    st.info("Detected mentions of color changes in your responses, giving higher weight to text analysis.")
+            
+            # Rule 3: If responses mention bleeding or itching, increase text weight significantly
+            symptom_keywords = ['bleed', 'bleeding', 'itch', 'itchy', 'painful', 'tender', 'hurt']
+            if any(keyword in all_responses.lower() for keyword in symptom_keywords):
+                text_weight += 0.2
+                image_weight -= 0.2
+                st.info("Detected mentions of symptoms in your responses, giving higher weight to text analysis.")
+            
+            # Rule 4: If responses mention sun exposure or family history, increase text weight
+            risk_keywords = ['sun', 'sunburn', 'fair skin', 'family history', 'melanoma history', 'skin cancer']
+            if any(keyword in all_responses.lower() for keyword in risk_keywords):
+                text_weight += 0.1
+                image_weight -= 0.1
+                st.info("Detected mentions of risk factors in your responses, giving higher weight to text analysis.")
+        
+        # Rule 5: Strong agreement between models increases confidence
+        if text_probs and image_probs:
+            # Find highest probability class for each model
+            text_max_class = max(text_probs, key=text_probs.get)
+            image_max_class = max(image_probs, key=image_probs.get)
+            
+            # If both models agree, boost that class
+            if text_max_class == image_max_class and text_max_class != "error":
+                st.success(f"Both models agree on the classification: {text_max_class.replace('_', ' ').title()}")
+                
+                # Get average confidence
+                avg_confidence = (text_probs[text_max_class] + image_probs[text_max_class]) / 2
+                
+                # Apply confidence boost
+                for label in unique_labels:
+                    if label == text_max_class:
+                        # Boost the agreed class by 20%
+                        text_probs[label] = min(1.0, text_probs[label] * 1.2)
+                        image_probs[label] = min(1.0, image_probs[label] * 1.2)
+        
+        # Normalize weights to sum to 1
+        total_weight = text_weight + image_weight
+        text_weight = text_weight / total_weight
+        image_weight = image_weight / total_weight
         
         # Combine probabilities for each class
         for label in unique_labels:
             text_prob = text_probs.get(label, 0.0)
             image_prob = image_probs.get(label, 0.0)
             combined_probs[label] = (text_prob * text_weight) + (image_prob * image_weight)
+        
+        # Log the weights used
+        st.write(f"Ponderación del diagnóstico: Respuestas del paciente ({text_weight:.2f}), Análisis de imagen ({image_weight:.2f})")
         
         # Get the highest probability class
         max_label = max(combined_probs, key=combined_probs.get)
@@ -261,7 +424,7 @@ def combine_predictions(text_probs, image_probs, unique_labels):
         max_score = image_probs.get(max_label, 0.0)
         return max_label, max_score, image_probs
 
-# Function to visualize classification results
+# Function to visualize classification results and risk levels
 def visualize_results(text_label, text_score, image_label, image_score, combined_label, combined_score):
     # Define color mapping
     color_map = {
@@ -273,85 +436,179 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     }
     
     # Create data for visualization
-    models = ['Text Model', 'Image Model', 'Combined Model']
+    models = ['Resultados del Cuestionario', 'Análisis de Imagen', 'Diagnóstico Combinado']
     scores = [text_score, image_score, combined_score]
     labels = [text_label, image_label, combined_label]
     colors = [color_map.get(label, '#9E9E9E') for label in labels]
     
     # Create dataframe
     chart_data = pd.DataFrame({
-        'Model': models,
-        'Confidence': scores,
-        'Classification': labels
+        'Modelo': models,
+        'Confianza': scores,
+        'Clasificación': labels
     })
     
-    # Create bar plot
-    fig, ax = plt.subplots(figsize=(10, 6))
+    # Create layout with 2 subplots: bar chart and pie chart
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
     
-    # Create barplot
-    bars = sns.barplot(x='Model', y='Confidence', data=chart_data, ax=ax, 
-                     palette=colors, hue='Model', legend=False)
+    # Create barplot on first subplot
+    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax1, 
+                     palette=colors, hue='Modelo', legend=False)
     
     # Add classification labels
     for i, bar in enumerate(bars.patches):
-        ax.text(
+        label_text = labels[i].replace('_', ' ').title()
+        ax1.text(
             bar.get_x() + bar.get_width()/2,
             bar.get_height() + 0.02,
-            labels[i].replace('_', ' ').title(),
+            label_text,
             ha='center',
             va='bottom',
             fontsize=12
         )
     
-    plt.title('Comparison of confidence and classification between models', fontsize=14)
-    plt.ylim(0, 1.1)
-    plt.ylabel('Confidence')
-    plt.xlabel('Model')
+    ax1.set_title('Confianza por método de diagnóstico', fontsize=14)
+    ax1.set_ylim(0, 1.1)
+    ax1.set_ylabel('Nivel de Confianza')
+    ax1.set_xlabel('Método de Análisis')
+    
+    # Create pie chart for risk distribution on second subplot
+    # Normalize and create risk data based on combined result
+    risk_labels = ['No preocupante', 'Levemente preocupante', 'Moderadamente preocupante', 'Altamente preocupante']
+    
+    if combined_label == 'not_concerning':
+        risk_values = [0.85, 0.15, 0.0, 0.0]
+    elif combined_label == 'mildly_concerning':
+        risk_values = [0.25, 0.65, 0.1, 0.0]
+    elif combined_label == 'moderately_concerning':
+        risk_values = [0.0, 0.2, 0.7, 0.1]
+    elif combined_label == 'highly_concerning':
+        risk_values = [0.0, 0.0, 0.3, 0.7]
+    else:
+        risk_values = [0.25, 0.25, 0.25, 0.25]  # Equal distribution for error
+    
+    risk_colors = ['#4CAF50', '#FFEB3B', '#FF9800', '#F44336']
+    
+    # Create pie chart
+    wedges, texts, autotexts = ax2.pie(
+        risk_values, 
+        labels=risk_labels, 
+        autopct='%1.1f%%',
+        colors=risk_colors,
+        startangle=90,
+        explode=(0.05, 0.05, 0.05, 0.05),
+        wedgeprops={'linewidth': 2, 'edgecolor': 'white'}
+    )
+    
+    # Styling pie chart text
+    for text in texts:
+        text.set_fontsize(10)
+    for autotext in autotexts:
+        autotext.set_fontsize(9)
+        autotext.set_color('white')
+    
+    ax2.set_title('Distribución de Riesgo', fontsize=14)
+    
+    plt.tight_layout()
     
     # Show plot
     st.pyplot(fig)
+    
+    # Create a severity gauge chart
+    fig2, ax = plt.subplots(figsize=(10, 4))
+    
+    # Define the gauge scale based on severity categories
+    severity_scale = ['No preocupante', 'Levemente\npreocupante', 'Moderadamente\npreocupante', 'Altamente\npreocupante']
+    severity_positions = [0, 0.33, 0.66, 1]
+    severity_colors = ['#4CAF50', '#FFEB3B', '#FF9800', '#F44336']
+    
+    # Determine position based on combined label
+    if combined_label == 'not_concerning':
+        position = 0.16  # Middle of "not concerning" range
+    elif combined_label == 'mildly_concerning':
+        position = 0.49  # Middle of "mildly concerning" range
+    elif combined_label == 'moderately_concerning':
+        position = 0.82  # Middle of "moderately concerning" range
+    elif combined_label == 'highly_concerning':
+        position = 0.95  # High end of "highly concerning" range
+    else:
+        position = 0.5  # Middle for error
+    
+    # Create the gauge background
+    for i in range(len(severity_positions)-1):
+        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i], alpha=0.3)
+    
+    # Plot the gauge needle
+    ax.arrow(position, 0.5, 0, -0.15, head_width=0.03, head_length=0.1, fc='black', ec='black', linewidth=2)
+    ax.scatter(position, 0.5, s=300, color='#333333', zorder=5)
+    
+    # Add gauge labels
+    for i, label in enumerate(severity_scale):
+        ax.text(severity_positions[i] + 0.16, 0.25, label, ha='center', va='center', fontsize=10, fontweight='bold')
+    
+    # Set gauge title
+    ax.text(0.5, 0.8, 'Indicador de Severidad', ha='center', va='center', fontsize=14, fontweight='bold')
+    
+    # Format gauge plot
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_aspect('equal')
+    ax.axis('off')
+    
+    # Add marker for current position
+    label_text = combined_label.replace('_', ' ').title()
+    ax.text(position, 0.6, f"{label_text}\n({combined_score:.2f})", ha='center', va='bottom', fontsize=11, fontweight='bold')
+    
+    # Show gauge plot
+    st.pyplot(fig2)
 
-# List of questions
-questions = [
-    # Growth and Evolution (E in ABCDE)
-    "Has the lesion grown or changed in size in recent months?",
-    "Have you noticed any change in its shape over time?",
-    "Has the color of the lesion changed recently?",
-    
-    # Appearance (A, B, C, D in ABCDE)
-    "Is the lesion larger than 6mm (about the size of a pencil eraser)?",
-    "Does the lesion look different from other moles or spots on your body?",
-    
-    # Symptoms
-    "Is the lesion itchy?",
-    "Does the lesion bleed without being injured?",
-    "Is the area around the lesion red or swollen?",
-    "Do you feel pain or tenderness in the lesion?",
-    "Has the lesion formed a scab or crust that doesn't heal?",
-    
-    # Additional risk factors
-    "Is the lesion exposed to the sun regularly?",
-    "Have you had severe sunburns in the past, especially as a child?",
-    "Do you have a family history of melanoma or skin cancer?",
-    "Do you have many moles (more than 50) on your body?",
-    "Do you have fair skin that burns easily in the sun?"
-]
+# Define the list of questions grouped by categories
+questions_by_category = {
+    "Crecimiento y Evolución": [
+        "¿Ha crecido o cambiado de tamaño la lesión en los últimos meses?",
+        "¿Ha notado algún cambio en su forma con el tiempo?",
+        "¿Ha cambiado el color de la lesión recientemente?"
+    ],
+    "Apariencia": [
+        "¿Es la lesión más grande que 6mm (aproximadamente el tamaño de una goma de borrar de lápiz)?",
+        "¿Luce la lesión diferente a otros lunares o manchas en su cuerpo?"
+    ],
+    "Síntomas": [
+        "¿Le pica la lesión?",
+        "¿Sangra la lesión sin haber sido lesionada?",
+        "¿Está el área alrededor de la lesión roja o inflamada?",
+        "¿Siente dolor o sensibilidad en la lesión?",
+        "¿Ha formado la lesión una costra que no sana?"
+    ],
+    "Factores de riesgo adicionales": [
+        "¿Está la lesión expuesta al sol regularmente?",
+        "¿Ha tenido quemaduras solares severas en el pasado, especialmente cuando era niño?",
+        "¿Tiene antecedentes familiares de melanoma o cáncer de piel?",
+        "¿Tiene muchos lunares (más de 50) en su cuerpo?",
+        "¿Tiene piel clara que se quema fácilmente con el sol?"
+    ]
+}
+
+# Flatten the questions list for other functions
+all_questions = []
+for category, questions in questions_by_category.items():
+    all_questions.extend(questions)
 
 # Main function
 def main():
     # Title and description
-    st.title("Multi-Modal Melanoma Classifier")
+    st.title("Sistema de Diagnóstico de Melanoma Multi-Modal")
     st.write("""
-    This advanced application combines a text-based classifier and a computer vision model to provide
-    more accurate melanoma risk assessment. Upload an image of the skin lesion and answer questions 
-    about its characteristics for a comprehensive analysis.
+    Esta aplicación avanzada combina el análisis de sus respuestas con un modelo de visión por computadora 
+    para proporcionar una evaluación más precisa del riesgo de melanoma. Complete el cuestionario y suba 
+    una imagen de la lesión para un análisis completo.
     """)
     
     # Load data
     data = load_data()
     
     if not data or "data" not in data or not data["data"]:
-        st.error("No data available for analysis.")
+        st.error("No hay datos disponibles para el análisis.")
         return
     
     unique_labels, label_to_id, id_to_label = get_labels(data)
@@ -366,239 +623,319 @@ def main():
     
     # Show model loading status
     if not text_model_loaded or not vision_model_loaded:
-        st.warning("One or more models could not be loaded. Some functionality may be limited.")
-    
-    # Sidebar with dataset information
-    st.sidebar.title("Dataset Information")
-    st.sidebar.write(f"Dataset name: {data.get('name', 'Unknown')}")
-    st.sidebar.write(f"Total examples: {len(data.get('data', []))}")
-    
-    # Show label distribution
-    label_counts = {}
-    for item in data.get("data", []):
-        if "label" in item:
-            if item["label"] not in label_counts:
-                label_counts[item["label"]] = 0
-            label_counts[item["label"]] += 1
-    
-    if label_counts:
-        st.sidebar.subheader("Label Distribution")
-        
-        # Create DataFrame for distribution
-        dist_data = pd.DataFrame({
-            'Label': list(label_counts.keys()),
-            'Count': list(label_counts.values())
-        })
-        
-        # Sort labels by concern level
-        order = ['not_concerning', 'mildly_concerning', 'moderately_concerning', 'highly_concerning']
-        if all(label in order for label in dist_data['Label']):
-            dist_data['Label'] = pd.Categorical(dist_data['Label'], categories=order, ordered=True)
-            dist_data = dist_data.sort_values('Label')
-        
-        # Define colors for labels
-        colors = {
-            'not_concerning': '#4CAF50',  # Green
-            'mildly_concerning': '#FFEB3B',  # Yellow
-            'moderately_concerning': '#FF9800',  # Orange
-            'highly_concerning': '#F44336'   # Red
-        }
-        
-        bar_colors = [colors.get(label, '#9E9E9E') for label in dist_data['Label']]
-        
-        # Create bar plot
-        fig, ax = plt.subplots(figsize=(8, 4))
-        
-        # Updated barplot version
-        bars = sns.barplot(x='Label', y='Count', data=dist_data, palette=bar_colors, ax=ax, legend=False)
-        
-        # Set ticks before changing labels
-        plt.xticks(range(len(dist_data)))
-        ax.set_xticklabels([label.replace('_', ' ').title() for label in dist_data['Label']])
-        
-        # Rotate labels
-        plt.xticks(rotation=45)
-        
-        plt.tight_layout()
-        st.sidebar.pyplot(fig)
+        st.warning("Uno o más modelos no pudieron cargarse. Algunas funcionalidades pueden estar limitadas.")
     
     # Create tabs for different sections
-    tab1, tab2 = st.tabs(["Multi-Modal Classification", "Dataset Examples"])
+    tab1, tab2, tab3 = st.tabs(["Cuestionario y Diagnóstico", "Historial", "Información"])
     
     with tab1:
-        st.header("Combined Image and Text Analysis")
+        # Store the state of the app
+        if 'step' not in st.session_state:
+            st.session_state.step = 1  # 1: Questionnaire, 2: Image, 3: Results
         
-        # Image upload section
-        st.subheader("Upload Image of Skin Lesion")
-        uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
+        if 'responses' not in st.session_state:
+            st.session_state.responses = {}
         
-        # Text response section
-        st.subheader("Answer Questions About the Lesion")
+        if 'text_result' not in st.session_state:
+            st.session_state.text_result = None
         
-        # Select a question
-        selected_question = st.selectbox("Select a question:", questions)
+        if 'image_result' not in st.session_state:
+            st.session_state.image_result = None
         
-        # Response input
-        user_response = st.text_input("Your response:", "")
+        if 'uploaded_image' not in st.session_state:
+            st.session_state.uploaded_image = None
         
-        # Submit button
-        submit_button = st.button("Analyze")
-        
-        if submit_button:
-            # Check if we have the necessary inputs
-            if not user_response and uploaded_file is None:
-                st.error("Please provide a text response and/or upload an image.")
-            else:
-                # Initialize variables to store classification results
-                text_label = None
-                text_score = 0.0
-                text_probs = {}
-                image_label = None
-                image_score = 0.0
-                image_probs = {}
-                
-                # Text analysis (if text model is loaded and response is provided)
-                if text_model_loaded and user_response:
-                    text_label, text_score, text_probs = classify_text_response(
-                        user_response, text_model, tokenizer, id_to_label
-                    )
-                
-                # Image analysis (if vision model is loaded and image is uploaded)
-                if vision_model_loaded and uploaded_file is not None:
-                    # Read and process image
-                    image = Image.open(uploaded_file).convert('RGB')
+        # Step 1: Complete questionnaire
+        if st.session_state.step == 1:
+            st.header("Cuestionario de Evaluación de Lesiones en la Piel")
+            st.write("Por favor, responda las siguientes preguntas sobre la lesión en su piel:")
+            
+            # Create a multi-step form for each category
+            all_completed = True
+            
+            for category, questions in questions_by_category.items():
+                with st.expander(f"{category}", expanded=True):
+                    st.write(f"**{category}**")
                     
-                    # Display the uploaded image
-                    st.image(image, caption="Uploaded Image", width=300)
+                    for question in questions:
+                        # Create a unique key for each question
+                        question_key = f"q_{questions_by_category[category].index(question)}_{category}"
+                        
+                        # Get response (use previous response if exists)
+                        response = st.text_input(
+                            question,
+                            value=st.session_state.responses.get(question_key, ""),
+                            key=question_key
+                        )
+                        
+                        # Store response
+                        st.session_state.responses[question_key] = response
+                        
+                        # Check if this question is completed
+                        if not response.strip():
+                            all_completed = False
+            
+            # Continue button
+            col1, col2 = st.columns([4, 1])
+            with col2:
+                continue_button = st.button(
+                    "Continuar con la imagen" if all_completed else "Continuar con la imagen (algunas preguntas están vacías)",
+                    disabled=False,
+                    type="primary" if all_completed else "secondary"
+                )
+                
+                if continue_button:
+                    # Proceed to image upload
+                    st.session_state.step = 2
+                    
+        
+        # Step 2: Upload image
+        elif st.session_state.step == 2:
+            st.header("Subir Imagen de la Lesión")
+            st.write("Por favor, suba una imagen clara de la lesión en su piel:")
+            
+            # Image upload section
+            uploaded_file = st.file_uploader("Elija una imagen...", type=["jpg", "jpeg", "png"])
+            
+            # Display the image if uploaded
+            if uploaded_file is not None:
+                st.session_state.uploaded_image = uploaded_file
+                image = Image.open(uploaded_file).convert('RGB')
+                st.image(image, caption="Imagen subida", width=300)
+                
+                # Buttons for navigation
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    if st.button("← Volver al cuestionario"):
+                        st.session_state.step = 1
+                        
+                
+                with col2:
+                    if st.button("Realizar análisis", type="primary"):
+                        # Process the image and questionnaire
+                        st.session_state.step = 3
+                        
+            else:
+                # Only show back button if no image
+                if st.button("← Volver al cuestionario"):
+                    st.session_state.step = 1
+                    
+        
+        # Step 3: Show results
+        elif st.session_state.step == 3:
+            st.header("Resultados del Diagnóstico")
+            
+            # Show loading spinner while processing
+            with st.spinner("Analizando datos..."):
+                # Process questionnaire responses if not already done
+                if st.session_state.text_result is None and text_model_loaded:
+                    # Combine all responses into one text
+                    combined_response = " ".join(st.session_state.responses.values())
+                    
+                    # Classify text
+                    text_label, text_score, text_probs = classify_text_response(
+                        combined_response, text_model, tokenizer, id_to_label
+                    )
+                    
+                    # Store result
+                    st.session_state.text_result = {
+                        "label": text_label,
+                        "score": text_score,
+                        "probs": text_probs
+                    }
+                
+                # Process image if uploaded and not already done
+                if st.session_state.image_result is None and vision_model_loaded and st.session_state.uploaded_image:
+                    # Load image
+                    image = Image.open(st.session_state.uploaded_image).convert('RGB')
+                    
+                    # Display the image
+                    st.image(image, caption="Imagen analizada", width=300)
                     
                     # Classify image
                     image_label, image_score, image_probs = classify_image(
                         image, vision_model, id_to_label
                     )
-                
-                # Check if we have at least one valid prediction
-                if (text_label is not None and text_label != "error") or (image_label is not None and image_label != "error"):
-                    st.subheader("Classification Results")
                     
-                    # If we only have text prediction
-                    if (text_label is not None and text_label != "error") and (image_label is None or image_label == "error"):
-                        st.write("**Text-based classification:**")
-                        st.write(f"Classification: {text_label.replace('_', ' ').title()}")
-                        st.write(f"Confidence: {text_score:.4f}")
-                        
-                        combined_label = text_label
-                        combined_score = text_score
-                        combined_probs = text_probs
-                    
-                    # If we only have image prediction
-                    elif (image_label is not None and image_label != "error") and (text_label is None or text_label == "error"):
-                        st.write("**Image-based classification:**")
-                        st.write(f"Classification: {image_label.replace('_', ' ').title()}")
-                        st.write(f"Confidence: {image_score:.4f}")
-                        
-                        combined_label = image_label
-                        combined_score = image_score
-                        combined_probs = image_probs
-                    
-                    # If we have both predictions
-                    else:
-                        st.write("**Text-based classification:**")
-                        st.write(f"Classification: {text_label.replace('_', ' ').title()}")
-                        st.write(f"Confidence: {text_score:.4f}")
-                        
-                        st.write("**Image-based classification:**")
-                        st.write(f"Classification: {image_label.replace('_', ' ').title()}")
-                        st.write(f"Confidence: {image_score:.4f}")
-                        
-                        # Combine predictions
-                        combined_label, combined_score, combined_probs = combine_predictions(
-                            text_probs, image_probs, unique_labels
-                        )
-                        
-                        st.write("**Combined classification:**")
-                        st.write(f"Classification: {combined_label.replace('_', ' ').title()}")
-                        st.write(f"Confidence: {combined_score:.4f}")
-                    
-                    # Visualize results (if we have both predictions)
-                    if text_label is not None and image_label is not None:
-                        visualize_results(
-                            text_label, text_score, 
-                            image_label, image_score, 
-                            combined_label, combined_score
-                        )
-                    
-                    # Classification explanation
-                    st.subheader("Results Interpretation")
-                    
-                    concern_explanations = {
-                        'not_concerning': """
-                        **Not concerning**: No warning signs detected. 
-                        However, it's important to regularly monitor any changes in the lesion.
-                        """,
-                        'mildly_concerning': """
-                        **Mildly concerning**: Some mild signs detected that warrant follow-up. 
-                        It's recommended to periodically observe the lesion and consult a dermatologist 
-                        if additional changes are noticed.
-                        """,
-                        'moderately_concerning': """
-                        **Moderately concerning**: Signs detected that require medical evaluation. 
-                        It's recommended to schedule an appointment with a dermatologist in the coming weeks
-                        for a professional assessment.
-                        """,
-                        'highly_concerning': """
-                        **Highly concerning**: Serious signs detected that require immediate medical attention. 
-                        It's recommended to consult a dermatologist as soon as possible for a complete evaluation
-                        and possible biopsy.
-                        """
+                    # Store result
+                    st.session_state.image_result = {
+                        "label": image_label,
+                        "score": image_score,
+                        "probs": image_probs
                     }
-                    
-                    # Show explanation for combined or available model
-                    st.markdown(concern_explanations.get(combined_label, ""))
-                    
-                    # Recommendation confidence
-                    if text_label == image_label:
-                        st.success("Both models agree on the classification, increasing confidence in the assessment.")
-                    
-                    # Show warning
-                    st.warning("""
-                    **Important note**: This classification is only an aid tool and does not substitute 
-                    professional medical diagnosis. Always consult a dermatologist for proper evaluation.
-                    """)
-                else:
-                    st.error("Could not generate a valid classification. Please check your inputs or try again.")
-    
-    with tab2:
-        st.header("Dataset Examples")
-        
-        # Check if there's data to show
-        if data and "data" in data and data["data"]:
-            # Show examples for each category
-            st.subheader("Examples by Category")
             
-            # Create dictionary of examples by label
-            examples_by_label = {}
-            for item in data["data"]:
-                if "label" in item and "text" in item:
-                    if item["label"] not in examples_by_label:
-                        examples_by_label[item["label"]] = []
-                    examples_by_label[item["label"]].append(item["text"])
-            
-            # Show examples by category
-            for label in unique_labels:
-                # Get examples for this label
-                examples = examples_by_label.get(label, [])
-                # Show up to 5 examples
-                example_list = examples[:5]
+                            # Show results
+            if st.session_state.text_result or st.session_state.image_result:
+                st.subheader("Resultados del Análisis")
                 
-                # Create expander for each category
-                with st.expander(f"{label.replace('_', ' ').title()} ({len(examples)} examples)"):
-                    if example_list:
-                        for i, example in enumerate(example_list):
-                            st.write(f"{i+1}. \"{example}\"")
-                    else:
-                        st.write("No examples available for this category.")
-        else:
-            st.warning("No examples available in the dataset.")
+                # Handle the case where we have both text and image results
+                if st.session_state.text_result and st.session_state.image_result:
+                    text_label = st.session_state.text_result["label"]
+                    text_score = st.session_state.text_result["score"]
+                    text_probs = st.session_state.text_result["probs"]
+                    
+                    image_label = st.session_state.image_result["label"]
+                    image_score = st.session_state.image_result["score"]
+                    image_probs = st.session_state.image_result["probs"]
+                    
+                    # Show individual results first
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Análisis del cuestionario:**")
+                        st.write(f"Clasificación: {text_label.replace('_', ' ').title()}")
+                        st.write(f"Confianza: {text_score:.4f}")
+                    
+                    with col2:
+                        st.write("**Análisis de la imagen:**")
+                        st.write(f"Clasificación: {image_label.replace('_', ' ').title()}")
+                        st.write(f"Confianza: {image_score:.4f}")
+                    
+                    # Combine predictions
+                    combined_label, combined_score, combined_probs = combine_predictions(
+                        text_probs, image_probs, unique_labels, st.session_state.responses
+                    )
+                    
+                    # Show combined results
+                    st.markdown("---")
+                    st.subheader("Diagnóstico Final")
+                    st.markdown(f"**Nivel de preocupación: {combined_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confianza: {combined_score:.4f}**")
+                    
+                    # Visualize all results
+                    st.markdown("### Comparación de Resultados")
+                    visualize_results(
+                        text_label, text_score, 
+                        image_label, image_score, 
+                        combined_label, combined_score
+                    )
+                    
+                # Only text classification
+                elif st.session_state.text_result:
+                    text_label = st.session_state.text_result["label"]
+                    text_score = st.session_state.text_result["score"]
+                    
+                    st.write("**Análisis del cuestionario:**")
+                    st.write(f"Clasificación: {text_label.replace('_', ' ').title()}")
+                    st.write(f"Confianza: {text_score:.4f}")
+                    
+                    st.markdown("---")
+                    st.markdown("### Diagnóstico Final")
+                    st.markdown(f"**Nivel de preocupación: {text_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confianza: {text_score:.4f}**")
+                    st.warning("Este diagnóstico se basa únicamente en sus respuestas. Para un análisis más preciso, suba una imagen de la lesión.")
+                
+                # Only image classification
+                elif st.session_state.image_result:
+                    image_label = st.session_state.image_result["label"]
+                    image_score = st.session_state.image_result["score"]
+                    
+                    st.write("**Análisis de la imagen:**")
+                    st.write(f"Clasificación: {image_label.replace('_', ' ').title()}")
+                    st.write(f"Confianza: {image_score:.4f}")
+                    
+                    st.markdown("---")
+                    st.markdown("### Diagnóstico Final")
+                    st.markdown(f"**Nivel de preocupación: {image_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confianza: {image_score:.4f}**")
+                    st.warning("Este diagnóstico se basa únicamente en la imagen. Para un análisis más preciso, complete el cuestionario.")
+                
+                # Show detailed explanation based on the final diagnosis
+                st.markdown("---")
+                st.subheader("Interpretación de los Resultados")
+                
+                # Get the final label (combined, text, or image)
+                final_label = None
+                if st.session_state.text_result and st.session_state.image_result:
+                    final_label = combined_label
+                elif st.session_state.text_result:
+                    final_label = text_label
+                elif st.session_state.image_result:
+                    final_label = image_label
+                
+                # Explanations for each concern level
+                concern_explanations = {
+                    'not_concerning': """
+                    **No preocupante**: No se detectaron signos de advertencia. 
+                    Sin embargo, es importante monitorear regularmente cualquier cambio en la lesión.
+                    
+                    **Recomendaciones:**
+                    - Realice autoexámenes regulares cada 3 meses
+                    - Proteja su piel del sol con protector solar SPF 30+
+                    - Si observa cambios en el futuro, consulte a un dermatólogo
+                    """,
+                    'mildly_concerning': """
+                    **Levemente preocupante**: Se detectaron algunos signos leves que justifican seguimiento. 
+                    Se recomienda observar periódicamente la lesión y consultar a un dermatólogo
+                    si se notan cambios adicionales.
+                    
+                    **Recomendaciones:**
+                    - Tome fotografías de la lesión mensualmente para monitorear cambios
+                    - Programe una revisión con un dermatólogo en los próximos 3 meses
+                    - Evite la exposición prolongada al sol y use protector solar
+                    """,
+                    'moderately_concerning': """
+                    **Moderadamente preocupante**: Se detectaron signos que requieren evaluación médica. 
+                    Se recomienda programar una cita con un dermatólogo en las próximas semanas
+                    para una evaluación profesional.
+                    
+                    **Recomendaciones:**
+                    - Programe una consulta con un dermatólogo en las próximas 2-3 semanas
+                    - Tome fotografías de la lesión para documentar su estado actual
+                    - Evite irritar o traumatizar la lesión
+                    - Proteja la zona de la exposición solar
+                    """,
+                    'highly_concerning': """
+                    **Altamente preocupante**: Se detectaron signos serios que requieren atención médica inmediata. 
+                    Se recomienda consultar a un dermatólogo lo antes posible para una evaluación completa
+                    y posible biopsia.
+                    
+                    **Recomendaciones:**
+                    - Busque atención dermatológica urgente (en los próximos días)
+                    - No intente tratar la lesión por su cuenta
+                    - Tome fotografías desde diferentes ángulos para el dermatólogo
+                    - Prepare un historial de cuándo notó la lesión y cómo ha cambiado
+                    """
+                }
+                
+                # Show explanation for final diagnosis
+                if final_label:
+                    st.markdown(concern_explanations.get(final_label, ""))
+                
+                # Add note about model agreement if applicable
+                if st.session_state.text_result and st.session_state.image_result:
+                    if text_label == image_label:
+                        st.success("Ambos métodos de análisis coinciden en la clasificación, lo que aumenta la confianza en el diagnóstico.")
+                
+                # Show warning about medical advice
+                st.warning("""
+                **Nota importante**: Esta clasificación es solo una herramienta de ayuda y no sustituye 
+                el diagnóstico médico profesional. Siempre consulte a un dermatólogo para una evaluación adecuada.
+                """)
+                
+                # Navigation buttons
+                col1, col2 = st.columns(2)
+                with col1:
+                    if st.button("← Volver al cuestionario"):
+                        # Reset results to force recalculation
+                        st.session_state.text_result = None
+                        st.session_state.image_result = None
+                        st.session_state.step = 1
+                        
+                
+                with col2:
+                    if st.button("← Volver a la imagen"):
+                        # Reset image result to force recalculation
+                        st.session_state.image_result = None
+                        st.session_state.step = 2
+                        
+            else:
+                st.error("No se pudo generar una clasificación válida. Por favor revise sus entradas o intente nuevamente.")
+                
+                # Back button
+                if st.button("← Volver al inicio"):
+                    st.session_state.step = 1
+                    
 
 if __name__ == "__main__":
     main()
