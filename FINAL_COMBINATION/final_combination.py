@@ -79,13 +79,21 @@ class MelanomaModel(nn.Module):
 def get_device():
     return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Function to load the vision model
 @st.cache_resource
 def load_vision_model():
     try:
         device = get_device()
         model = MelanomaModel(num_classes=2)
-        model_path = os.path.join( "COMPUTER_VISION", "best_model.pth")
+        
+        # Convert to absolute path with correct separators
+        model_path = os.path.abspath(os.path.join( "best_model.pth"))
+        
+        # Check if file exists
+        if not os.path.isfile(model_path):
+            st.error(f"Model file not found: {model_path}")
+            return None, None
+            
+        st.info(f"Attempting to load vision model from: {model_path}")
         
         # Load model to the appropriate device
         if device.type == 'cuda':
@@ -100,6 +108,8 @@ def load_vision_model():
         return model, device
     except Exception as e:
         st.error(f"Error loading vision model: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None, None
 
 # Function to load the transformers model
@@ -107,17 +117,67 @@ def load_vision_model():
 def load_text_model():
     try:
         device = get_device()
-        model_path = os.path.join( "CHATBOT", "finetuned_model")
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-        model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        
+        # Define label mapping (needed for model loading)
+        num_labels = 4
+        id2label = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "higly_concerning"}
+        label2id = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "higly_concerning"}
+        
+        # Path alternatives to try
+        paths_to_try = [
+            os.path.abspath(os.path.join( "finetuned_model")),
+            os.path.abspath("./CHATBOT/finetuned_model")
+        ]
+        
+        # Try each path
+        model = None
+        tokenizer = None
+        
+        for path in paths_to_try:
+            st.info(f"Attempting to load model from: {path}")
+            
+            if os.path.exists(path):
+                st.success(f"✅ Path exists: {path}")
+                
+                try:
+                    # Load tokenizer first
+                    tokenizer = AutoTokenizer.from_pretrained(
+                        path,
+                        local_files_only=True
+                    )
+                    
+                    # Load model with label configuration
+                    model = AutoModelForSequenceClassification.from_pretrained(
+                        path,
+                        num_labels=num_labels,
+                        id2label=id2label,
+                        label2id=label2id,
+                        local_files_only=True
+                    )
+                    
+                    st.success(f"✅ Successfully loaded model from: {path}")
+                    break
+                    
+                except Exception as e:
+                    st.warning(f"Could not load model from {path}: {str(e)}")
+                    continue
+            else:
+                st.warning(f"❌ Path does not exist: {path}")
+        
+        if model is None or tokenizer is None:
+            st.error("Failed to load model from any of the attempted paths")
+            return None, None, None
         
         model = model.to(device)
         model.eval()
         
         st.sidebar.success(f"Text model loaded on {device.type.upper()}")
         return tokenizer, model, device
+        
     except Exception as e:
         st.error(f"Error loading text model: {e}")
+        import traceback
+        st.error(traceback.format_exc())
         return None, None, None
 
 # Transformations for the images
