@@ -83,29 +83,40 @@ def get_device():
 def load_vision_model():
     try:
         device = get_device()
-        model = MelanomaModel(num_classes=2)
         
-        # Convert to absolute path with correct separators
-        model_path = os.path.abspath(os.path.join( "best_model.pth"))
+        # Paths to try for the model
+        paths_to_try = [
+            'melanoma_model_1_torch_RESNET50_harvard.pth',
+        ]
         
-        # Check if file exists
-        if not os.path.isfile(model_path):
-            st.error(f"Model file not found: {model_path}")
-            return None, None
+        for model_path in paths_to_try:
+            st.info(f"Attempting to load vision model from: {model_path}")
             
-        st.info(f"Attempting to load vision model from: {model_path}")
+            if os.path.exists(model_path):
+                st.success(f"✅ Model file exists: {model_path}")
+                
+                try:
+                    # Create model with the same architecture as described
+                    model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+                    model.fc = nn.Linear(model.fc.in_features, 1)  # 1 neuron for binary classification
+                    
+                    # Load the state dict
+                    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+                    model.eval()
+                    model = model.to(device)
+                    
+                    st.success(f"✅ Successfully loaded vision model from: {model_path}")
+                    return model, device
+                    
+                except Exception as e:
+                    st.warning(f"Could not load model from {model_path}: {str(e)}")
+                    continue
+            else:
+                st.warning(f"❌ Model file does not exist: {model_path}")
         
-        # Load model to the appropriate device
-        if device.type == 'cuda':
-            model.load_state_dict(torch.load(model_path))
-        else:
-            model.load_state_dict(torch.load(model_path, map_location='cpu'))
-            
-        model = model.to(device)
-        model.eval()
+        st.error("Failed to load vision model from any of the attempted paths")
+        return None, None
         
-        st.sidebar.success(f"Vision model loaded on {device.type.upper()}")
-        return model, device
     except Exception as e:
         st.error(f"Error loading vision model: {e}")
         import traceback
@@ -121,7 +132,7 @@ def load_text_model():
         # Define label mapping (needed for model loading)
         num_labels = 4
         id2label = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "higly_concerning"}
-        label2id = {0: "not_concerning", 1: "mildly_concerning", 2: "moderately_concerning", 3: "higly_concerning"}
+        label2id = {"not_concerning": 0, "mildly_concerning": 1, "moderately_concerning": 2, "higly_concerning": 3}
         
         # Path alternatives to try
         paths_to_try = [
