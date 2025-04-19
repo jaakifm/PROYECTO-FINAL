@@ -6,6 +6,7 @@ from torchvision import models
 from PIL import Image
 import numpy as np
 import os
+import time
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 
 # Page configuration
@@ -74,31 +75,50 @@ class MelanomaModel(nn.Module):
     def forward(self, x):
         return self.base_model(x)
 
+# Function to determine device (GPU or CPU)
+def get_device():
+    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 # Function to load the vision model
 @st.cache_resource
 def load_vision_model():
     try:
+        device = get_device()
         model = MelanomaModel(num_classes=2)
-        model_path = os.path.join("PROYECTO-FINAL", "COMPUTER_VISION", "best_model.pth")
-        model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
+        model_path = os.path.join( "COMPUTER_VISION", "best_model.pth")
+        
+        # Load model to the appropriate device
+        if device.type == 'cuda':
+            model.load_state_dict(torch.load(model_path))
+        else:
+            model.load_state_dict(torch.load(model_path, map_location='cpu'))
+            
+        model = model.to(device)
         model.eval()
-        return model
+        
+        st.sidebar.success(f"Vision model loaded on {device.type.upper()}")
+        return model, device
     except Exception as e:
         st.error(f"Error loading vision model: {e}")
-        return None
+        return None, None
 
 # Function to load the transformers model
 @st.cache_resource
 def load_text_model():
     try:
-        model_path = os.path.join("PROYECTO-FINAL", "CHATBOT", "finetuned_model")
+        device = get_device()
+        model_path = os.path.join( "CHATBOT", "finetuned_model")
         tokenizer = AutoTokenizer.from_pretrained(model_path)
         model = AutoModelForSequenceClassification.from_pretrained(model_path)
+        
+        model = model.to(device)
         model.eval()
-        return tokenizer, model
+        
+        st.sidebar.success(f"Text model loaded on {device.type.upper()}")
+        return tokenizer, model, device
     except Exception as e:
         st.error(f"Error loading text model: {e}")
-        return None, None
+        return None, None, None
 
 # Transformations for the images
 def get_transforms():
@@ -135,13 +155,16 @@ questions = [
 ]
 
 # Function to process responses with the text model
-def analyze_responses(responses, tokenizer, model):
+def analyze_responses(responses, tokenizer, model, device):
     try:
         # Combine all responses into a single text
         full_text = " ".join([f"Question: {q} Answer: {r}" for q, r in zip(questions, responses)])
         
         # Tokenize the text
         inputs = tokenizer(full_text, return_tensors="pt", truncation=True, max_length=512)
+        
+        # Move inputs to the same device as the model
+        inputs = {k: v.to(device) for k, v in inputs.items()}
         
         # Process with the model
         with torch.no_grad():
@@ -157,10 +180,13 @@ def analyze_responses(responses, tokenizer, model):
         return 0.5  # Neutral value in case of error
 
 # Function to process the image with the vision model
-def analyze_image(image, model, transform):
+def analyze_image(image, model, transform, device):
     try:
         # Preprocess the image
         image_tensor = transform(image).unsqueeze(0)
+        
+        # Move tensor to the same device as the model
+        image_tensor = image_tensor.to(device)
         
         # Process with the model
         with torch.no_grad():
@@ -207,9 +233,17 @@ def get_combined_diagnosis(text_score, image_score):
 
 # Main function
 def main():
+    # Add GPU info in sidebar
+    st.sidebar.title("System Information")
+    if torch.cuda.is_available():
+        gpu_info = f"GPU: {torch.cuda.get_device_name(0)}"
+        st.sidebar.success(f"✅ CUDA available: {gpu_info}")
+    else:
+        st.sidebar.warning("⚠️ CUDA not available. Using CPU.")
+    
     # Load models
-    vision_model = load_vision_model()
-    tokenizer, text_model = load_text_model()
+    vision_model, vision_device = load_vision_model()
+    tokenizer, text_model, text_device = load_text_model()
     transform = get_transforms()
     
     # Verify that the models loaded correctly
@@ -279,13 +313,19 @@ def main():
         if st.button("Generate Diagnosis") and all_questions_answered and image_uploaded:
             with st.spinner("Analyzing data..."):
                 # Analyze textual responses
-                text_score = analyze_responses(st.session_state.responses, tokenizer, text_model)
+                start_time = time.time()
+                text_score = analyze_responses(st.session_state.responses, tokenizer, text_model, text_device)
+                text_time = time.time() - start_time
                 
                 # Analyze image
-                image_score = analyze_image(st.session_state.uploaded_image, vision_model, transform)
+                start_time = time.time()
+                image_score = analyze_image(st.session_state.uploaded_image, vision_model, transform, vision_device)
+                image_time = time.time() - start_time
                 
                 # Combine results
                 st.session_state.results = get_combined_diagnosis(text_score, image_score)
+                st.session_state.results["text_time"] = text_time
+                st.session_state.results["image_time"] = image_time
         
         # Display results if available
         if st.session_state.results:
@@ -296,8 +336,8 @@ def main():
                 <div class="result-box {results['css_class']}">
                     <h2>Risk level: {results['risk_level']}</h2>
                     <h3>Recommendation: {results['recommendation']}</h3>
-                    <p>Textual analysis result: {results['text_score']:.2f}</p>
-                    <p>Image analysis result: {results['image_score']:.2f}</p>
+                    <p>Textual analysis result: {results['text_score']:.2f} (processed in {results['text_time']:.2f} seconds)</p>
+                    <p>Image analysis result: {results['image_score']:.2f} (processed in {results['image_time']:.2f} seconds)</p>
                     <p>Combined score: {results['combined_score']:.2f}</p>
                     <p><b>Note:</b> This system is only an assistive tool and does not replace professional diagnosis.</p>
                 </div>
