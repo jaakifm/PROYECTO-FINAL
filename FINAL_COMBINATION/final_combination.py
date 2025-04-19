@@ -544,10 +544,10 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     
     # Add gauge labels
     for i, label in enumerate(severity_scale):
-        ax.text(severity_positions[i] + 0.16, 0.25, label, ha='center', va='center', fontsize=10, fontweight='bold')
+        ax.text(severity_positions[i] + 0.16, 0.25, label, ha='center', va='center', fontsize=5, fontweight='bold')
     
     # Set gauge title
-    ax.text(0.5, 0.8, 'Indicador de Severidad', ha='center', va='center', fontsize=14, fontweight='bold')
+    ax.text(0.5, 0.8, 'Indicador de Severidad', ha='center', va='center', fontsize=10, fontweight='bold')
     
     # Format gauge plot
     ax.set_xlim(0, 1)
