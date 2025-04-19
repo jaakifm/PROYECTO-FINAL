@@ -13,6 +13,7 @@ import os
 import traceback
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from torchvision import models
+from llama_cpp import Llama  # Add import for LLama model
 
 # Page configuration
 st.set_page_config(
@@ -223,6 +224,71 @@ def load_vision_model():
         st.warning("Using a dummy model that returns fixed predictions for demonstration")
         return dummy_model
 
+# Function to load LLM model for melanoma information chatbot
+@st.cache_resource
+def load_llm_model():
+    MODEL_PATH = r"C:\Users\jakif\.lmstudio\models\QuantFactory\Bio-Medical-Llama-3-8B-GGUF\Bio-Medical-Llama-3-8B.Q4_K_S.gguf"
+    
+    if not os.path.exists(MODEL_PATH):
+        st.error(f"Model not found at {MODEL_PATH}. Please verify the path.")
+        return None
+    
+    try:
+        model = Llama(
+            model_path=MODEL_PATH,
+            n_ctx=4096,           # Context size
+            n_gpu_layers=-1,      # Use as many GPU layers as possible (-1)
+            n_batch=512,          # Batch size for inference
+            verbose=False         # Silence logs
+        )
+        return model
+    except Exception as e:
+        st.error(f"Error loading LLM model: {str(e)}")
+        st.error(traceback.format_exc())
+        return None
+
+# Function to generate responses from the LLM model
+def generate_response(prompt, model):
+    if model is None:
+        return "Model could not be loaded. Please check the model path and try again."
+    
+    # Context for dermatologist specialist
+    system_prompt = """
+    You act as a dermatologist specializing in melanomas. Your goal is to provide accurate and educational medical information about melanomas, including:
+
+    - Identifying warning signs
+    - Risk factors
+    - Prevention methods
+    - Diagnosis and treatment options
+    - When to seek medical attention
+
+    Remember that you are not diagnosing specific cases and should always recommend consulting a physician for individual cases. Base your answers on up-to-date scientific evidence.
+    """
+    
+    # Format for LLaMA model
+    full_prompt = f"""<|system|>
+{system_prompt}
+<|user|>
+{prompt}
+<|assistant|>"""
+    
+    try:
+        # Generate response
+        response = model.create_completion(
+            full_prompt,
+            max_tokens=1024,
+            temperature=0.7,
+            top_p=0.9,
+            stop=["<|user|>", "<|system|>"],
+            echo=False
+        )
+        
+        # Extract text from response
+        return response['choices'][0]['text'].strip()
+    except Exception as e:
+        st.error(f"Error generating response: {str(e)}")
+        return f"I'm sorry, I encountered an error while generating a response. Please try again."
+
 # Function to classify text response
 def classify_text_response(response, model, tokenizer, id_to_label):
     try:
@@ -409,7 +475,7 @@ def combine_predictions(text_probs, image_probs, unique_labels, user_responses=N
             combined_probs[label] = (text_prob * text_weight) + (image_prob * image_weight)
         
         # Log the weights used
-        st.write(f"Ponderación del diagnóstico: Respuestas del paciente ({text_weight:.2f}), Análisis de imagen ({image_weight:.2f})")
+        st.write(f"Diagnostic weighting: Patient responses ({text_weight:.2f}), Image analysis ({image_weight:.2f})")
         
         # Get the highest probability class
         max_label = max(combined_probs, key=combined_probs.get)
@@ -441,23 +507,23 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     combined_label = str(combined_label) if combined_label is not None else "error"
     
     # Create data for visualization
-    models = ['Resultados del Cuestionario', 'Análisis de Imagen', 'Diagnóstico Combinado']
+    models = ['Questionnaire Results', 'Image Analysis', 'Combined Diagnosis']
     scores = [text_score, image_score, combined_score]
     labels = [text_label, image_label, combined_label]
     colors = [color_map.get(label, '#9E9E9E') for label in labels]
     
     # Create dataframe
     chart_data = pd.DataFrame({
-        'Modelo': models,
-        'Confianza': scores,
-        'Clasificación': labels
+        'Model': models,
+        'Confidence': scores,
+        'Classification': labels
     })
     
     # Create a bar chart for confidence levels
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Create barplot
-    bars = sns.barplot(x='Modelo', y='Confianza', data=chart_data, ax=ax, palette=colors, hue='Clasificación')
+    bars = sns.barplot(x='Model', y='Confidence', data=chart_data, ax=ax, palette=colors, hue='Classification')
     
     # Add classification labels - with safety checks
     for i, bar in enumerate(bars.patches):
@@ -483,10 +549,10 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
                     fontsize=12
                 )
     
-    ax.set_title('Confianza por método de diagnóstico', fontsize=14)
+    ax.set_title('Confidence by Diagnostic Method', fontsize=14)
     ax.set_ylim(0, 1.1)
-    ax.set_ylabel('Nivel de Confianza')
-    ax.set_xlabel('Método de Análisis')
+    ax.set_ylabel('Confidence Level')
+    ax.set_xlabel('Analysis Method')
     
     plt.tight_layout()
     
@@ -497,7 +563,7 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     fig2, ax = plt.subplots(figsize=(10, 4))
     
     # Define the gauge scale based on severity categories
-    severity_scale = ['No preocupante', 'Levemente\npreocupante', 'Moderadamente\npreocupante', 'Altamente\npreocupante']
+    severity_scale = ['Not Concerning', 'Mildly\nConcerning', 'Moderately\nConcerning', 'Highly\nConcerning']
     severity_positions = [0, 0.33, 0.66, 1]
     severity_colors = ['#4CAF50', '#FFEB3B', '#FF9800', '#F44336']
     
@@ -513,58 +579,32 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     else:
         position = 0.5  # Middle for error
     
-    # Create the gauge background
-    for i in range(len(severity_positions)-1):
-        ax.axvspan(severity_positions[i], severity_positions[i+1], facecolor=severity_colors[i], alpha=0.3)
-    
-    # Plot the gauge needle
-    ax.arrow(position, 0.5, 0, -0.15, head_width=0.03, head_length=0.1, fc='black', ec='black', linewidth=2)
-    ax.scatter(position, 0.5, s=300, color='#333333', zorder=5)
-    
-    # Add gauge labels
-    for i, label in enumerate(severity_scale):
-        ax.text(severity_positions[i] + 0.16, 0.25, label, ha='center', va='center', fontsize=5, fontweight='bold')
-    
-    # Set gauge title
-    ax.text(0.5, 0.8, 'Indicador de Severidad', ha='center', va='center', fontsize=10, fontweight='bold')
-    
-    # Format gauge plot
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
-    ax.set_aspect('equal')
-    ax.axis('off')
-    
-    # Add marker for current position
-    label_text = combined_label.replace('_', ' ').title()
-    ax.text(position, 0.6, f"{label_text}\n({combined_score:.2f})", ha='center', va='bottom', fontsize=11, fontweight='bold')
-    
-    # Show gauge plot
-    st.pyplot(fig2)
+
 
 # Define the list of questions grouped by categories
 questions_by_category = {
-    "Crecimiento y Evolución": [
-        "¿Ha crecido o cambiado de tamaño la lesión en los últimos meses?",
-        "¿Ha notado algún cambio en su forma con el tiempo?",
-        "¿Ha cambiado el color de la lesión recientemente?"
+    "Growth and Evolution": [
+        "Has the lesion grown or changed in size in recent months?",
+        "Have you noticed any change in its shape over time?",
+        "Has the color of the lesion changed recently?"
     ],
-    "Apariencia": [
-        "¿Es la lesión más grande que 6mm (aproximadamente el tamaño de una goma de borrar de lápiz)?",
-        "¿Luce la lesión diferente a otros lunares o manchas en su cuerpo?"
+    "Appearance": [
+        "Is the lesion larger than 6mm (about the size of a pencil eraser)?",
+        "Does the lesion look different from other moles or spots on your body?"
     ],
-    "Síntomas": [
-        "¿Le pica la lesión?",
-        "¿Sangra la lesión sin haber sido lesionada?",
-        "¿Está el área alrededor de la lesión roja o inflamada?",
-        "¿Siente dolor o sensibilidad en la lesión?",
-        "¿Ha formado la lesión una costra que no sana?"
+    "Symptoms": [
+        "Is the lesion itchy?",
+        "Does the lesion bleed without being injured?",
+        "Is the area around the lesion red or swollen?",
+        "Do you feel pain or tenderness in the lesion?",
+        "Has the lesion formed a scab or crust that doesn't heal?"
     ],
-    "Factores de riesgo adicionales": [
-        "¿Está la lesión expuesta al sol regularmente?",
-        "¿Ha tenido quemaduras solares severas en el pasado, especialmente cuando era niño?",
-        "¿Tiene antecedentes familiares de melanoma o cáncer de piel?",
-        "¿Tiene muchos lunares (más de 50) en su cuerpo?",
-        "¿Tiene piel clara que se quema fácilmente con el sol?"
+    "Additional Risk Factors": [
+        "Is the lesion regularly exposed to the sun?",
+        "Have you had severe sunburns in the past, especially as a child?",
+        "Do you have a family history of melanoma or skin cancer?",
+        "Do you have many moles (more than 50) on your body?",
+        "Do you have fair skin that burns easily in the sun?"
     ]
 }
 
@@ -576,18 +616,18 @@ for category, questions in questions_by_category.items():
 # Main function
 def main():
     # Title and description
-    st.title("Sistema de Diagnóstico de Melanoma Multi-Modal")
+    st.title("Multi-Modal Melanoma Diagnostic System")
     st.write("""
-    Esta aplicación avanzada combina el análisis de sus respuestas con un modelo de visión por computadora 
-    para proporcionar una evaluación más precisa del riesgo de melanoma. Complete el cuestionario y suba 
-    una imagen de la lesión para un análisis completo.
+    This advanced application combines the analysis of your responses with a computer vision model
+    to provide a more accurate assessment of melanoma risk. Complete the questionnaire and upload
+    an image of the lesion for a comprehensive analysis.
     """)
     
     # Load data
     data = load_data()
     
     if not data or "data" not in data or not data["data"]:
-        st.error("No hay datos disponibles para el análisis.")
+        st.error("No data available for analysis.")
         return
     
     unique_labels, label_to_id, id_to_label = get_labels(data)
@@ -602,10 +642,10 @@ def main():
     
     # Show model loading status
     if not text_model_loaded or not vision_model_loaded:
-        st.warning("Uno o más modelos no pudieron cargarse. Algunas funcionalidades pueden estar limitadas.")
+        st.warning("One or more models could not be loaded. Some functionality may be limited.")
     
     # Create tabs for different sections
-    tab1, tab2 = st.tabs(["Cuestionario y Diagnóstico", "Resultados"])
+    tab1, tab2 = st.tabs(["Questionnaire & Diagnosis", "Results"])
     
     with tab1:
         # Store the state of the app
@@ -626,8 +666,8 @@ def main():
         
         # Step 1: Complete questionnaire
         if st.session_state.step == 1:
-            st.header("Cuestionario de Evaluación de Lesiones en la Piel")
-            st.write("Por favor, responda las siguientes preguntas sobre la lesión en su piel:")
+            st.header("Skin Lesion Assessment Questionnaire")
+            st.write("Please answer the following questions about the skin lesion:")
             
             # Create a multi-step form for each category
             all_completed = True
@@ -658,7 +698,7 @@ def main():
             col1, col2 = st.columns([4, 1])
             with col2:
                 continue_button = st.button(
-                    "Continuar con la imagen" if all_completed else "Continuar con la imagen (algunas preguntas están vacías)",
+                    "Continue to Image" if all_completed else "Continue to Image (some questions are empty)",
                     disabled=False,
                     type="primary" if all_completed else "secondary"
                 )
@@ -670,42 +710,42 @@ def main():
         
         # Step 2: Upload image
         elif st.session_state.step == 2:
-            st.header("Subir Imagen de la Lesión")
-            st.write("Por favor, suba una imagen clara de la lesión en su piel:")
+            st.header("Upload Image of the Lesion")
+            st.write("Please upload a clear image of the skin lesion:")
             
             # Image upload section
-            uploaded_file = st.file_uploader("Elija una imagen...", type=["jpg", "jpeg", "png"])
+            uploaded_file = st.file_uploader("Choose an image...", type=["jpg", "jpeg", "png"])
             
             # Display the image if uploaded
             if uploaded_file is not None:
                 st.session_state.uploaded_image = uploaded_file
                 image = Image.open(uploaded_file).convert('RGB')
-                st.image(image, caption="Imagen subida", width=300)
+                st.image(image, caption="Uploaded Image", width=300)
                 
                 # Buttons for navigation
                 col1, col2, col3 = st.columns([1, 1, 2])
                 with col1:
-                    if st.button("← Volver al cuestionario"):
+                    if st.button("← Back to Questionnaire"):
                         st.session_state.step = 1
                         
                 
                 with col2:
-                    if st.button("Realizar análisis", type="primary"):
+                    if st.button("Perform Analysis", type="primary"):
                         # Process the image and questionnaire
                         st.session_state.step = 3
                         
             else:
                 # Only show back button if no image
-                if st.button("← Volver al cuestionario"):
+                if st.button("← Back to Questionnaire"):
                     st.session_state.step = 1
                     
         
         # Step 3: Show results
         elif st.session_state.step == 3:
-            st.header("Resultados del Diagnóstico")
+            st.header("Diagnostic Results")
             
             # Show loading spinner while processing
-            with st.spinner("Analizando datos..."):
+            with st.spinner("Analyzing data..."):
                 # Process questionnaire responses if not already done
                 if st.session_state.text_result is None and text_model_loaded:
                     # Combine all responses into one text
@@ -729,7 +769,7 @@ def main():
                     image = Image.open(st.session_state.uploaded_image).convert('RGB')
                     
                     # Display the image
-                    st.image(image, caption="Imagen analizada", width=300)
+                    st.image(image, caption="Analyzed Image", width=300)
                     
                     # Classify image
                     image_label, image_score, image_probs = classify_image(
@@ -743,9 +783,9 @@ def main():
                         "probs": image_probs
                     }
             
-                            # Show results
+            # Show results
             if st.session_state.text_result or st.session_state.image_result:
-                st.subheader("Resultados del Análisis")
+                st.subheader("Analysis Results")
                 
                 # Handle the case where we have both text and image results
                 if st.session_state.text_result and st.session_state.image_result:
@@ -761,14 +801,14 @@ def main():
                     col1, col2 = st.columns(2)
                     
                     with col1:
-                        st.write("**Análisis del cuestionario:**")
-                        st.write(f"Clasificación: {text_label.replace('_', ' ').title()}")
-                        st.write(f"Confianza: {text_score:.4f}")
+                        st.write("**Questionnaire Analysis:**")
+                        st.write(f"Classification: {text_label.replace('_', ' ').title()}")
+                        st.write(f"Confidence: {text_score:.4f}")
                     
                     with col2:
-                        st.write("**Análisis de la imagen:**")
-                        st.write(f"Clasificación: {image_label.replace('_', ' ').title()}")
-                        st.write(f"Confianza: {image_score:.4f}")
+                        st.write("**Image Analysis:**")
+                        st.write(f"Classification: {image_label.replace('_', ' ').title()}")
+                        st.write(f"Confidence: {image_score:.4f}")
                     
                     # Combine predictions
                     combined_label, combined_score, combined_probs = combine_predictions(
@@ -777,12 +817,12 @@ def main():
                     
                     # Show combined results
                     st.markdown("---")
-                    st.subheader("Diagnóstico Final")
-                    st.markdown(f"**Nivel de preocupación: {combined_label.replace('_', ' ').title()}**")
-                    st.markdown(f"**Confianza: {combined_score:.4f}**")
+                    st.subheader("Final Diagnosis")
+                    st.markdown(f"**Concern Level: {combined_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confidence: {combined_score:.4f}**")
                     
                     # Visualize all results
-                    st.markdown("### Comparación de Resultados")
+                    st.markdown("### Results Comparison")
                     visualize_results(
                         text_label, text_score, 
                         image_label, image_score, 
@@ -794,34 +834,34 @@ def main():
                     text_label = st.session_state.text_result["label"]
                     text_score = st.session_state.text_result["score"]
                     
-                    st.write("**Análisis del cuestionario:**")
-                    st.write(f"Clasificación: {text_label.replace('_', ' ').title()}")
-                    st.write(f"Confianza: {text_score:.4f}")
+                    st.write("**Questionnaire Analysis:**")
+                    st.write(f"Classification: {text_label.replace('_', ' ').title()}")
+                    st.write(f"Confidence: {text_score:.4f}")
                     
                     st.markdown("---")
-                    st.markdown("### Diagnóstico Final")
-                    st.markdown(f"**Nivel de preocupación: {text_label.replace('_', ' ').title()}**")
-                    st.markdown(f"**Confianza: {text_score:.4f}**")
-                    st.warning("Este diagnóstico se basa únicamente en sus respuestas. Para un análisis más preciso, suba una imagen de la lesión.")
+                    st.markdown("### Final Diagnosis")
+                    st.markdown(f"**Concern Level: {text_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confidence: {text_score:.4f}**")
+                    st.warning("This diagnosis is based solely on your responses. For a more accurate analysis, please upload an image of the lesion.")
                 
                 # Only image classification
                 elif st.session_state.image_result:
                     image_label = st.session_state.image_result["label"]
                     image_score = st.session_state.image_result["score"]
                     
-                    st.write("**Análisis de la imagen:**")
-                    st.write(f"Clasificación: {image_label.replace('_', ' ').title()}")
-                    st.write(f"Confianza: {image_score:.4f}")
+                    st.write("**Image Analysis:**")
+                    st.write(f"Classification: {image_label.replace('_', ' ').title()}")
+                    st.write(f"Confidence: {image_score:.4f}")
                     
                     st.markdown("---")
-                    st.markdown("### Diagnóstico Final")
-                    st.markdown(f"**Nivel de preocupación: {image_label.replace('_', ' ').title()}**")
-                    st.markdown(f"**Confianza: {image_score:.4f}**")
-                    st.warning("Este diagnóstico se basa únicamente en la imagen. Para un análisis más preciso, complete el cuestionario.")
+                    st.markdown("### Final Diagnosis")
+                    st.markdown(f"**Concern Level: {image_label.replace('_', ' ').title()}**")
+                    st.markdown(f"**Confidence: {image_score:.4f}**")
+                    st.warning("This diagnosis is based solely on the image. For a more accurate analysis, please complete the questionnaire.")
                 
                 # Show detailed explanation based on the final diagnosis
                 st.markdown("---")
-                st.subheader("Interpretación de los Resultados")
+                st.subheader("Results Interpretation")
                 
                 # Get the final label (combined, text, or image)
                 final_label = None
@@ -835,45 +875,45 @@ def main():
                 # Explanations for each concern level
                 concern_explanations = {
                     'not_concerning': """
-                    **No preocupante**: No se detectaron signos de advertencia. 
-                    Sin embargo, es importante monitorear regularmente cualquier cambio en la lesión.
+                    **Not Concerning**: No warning signs detected. 
+                    However, it's important to regularly monitor any changes in the lesion.
                     
-                    **Recomendaciones:**
-                    - Realice autoexámenes regulares cada 3 meses
-                    - Proteja su piel del sol con protector solar SPF 30+
-                    - Si observa cambios en el futuro, consulte a un dermatólogo
+                    **Recommendations:**
+                    - Perform regular self-examinations every 3 months
+                    - Protect your skin from the sun with SPF 30+ sunscreen
+                    - If you notice changes in the future, consult a dermatologist
                     """,
                     'mildly_concerning': """
-                    **Levemente preocupante**: Se detectaron algunos signos leves que justifican seguimiento. 
-                    Se recomienda observar periódicamente la lesión y consultar a un dermatólogo
-                    si se notan cambios adicionales.
+                    **Mildly Concerning**: Some mild signs have been detected that warrant follow-up. 
+                    It's recommended to periodically observe the lesion and consult a dermatologist
+                    if additional changes are noticed.
                     
-                    **Recomendaciones:**
-                    - Tome fotografías de la lesión mensualmente para monitorear cambios
-                    - Programe una revisión con un dermatólogo en los próximos 3 meses
-                    - Evite la exposición prolongada al sol y use protector solar
+                    **Recommendations:**
+                    - Take monthly photographs of the lesion to monitor changes
+                    - Schedule a review with a dermatologist in the next 3 months
+                    - Avoid prolonged sun exposure and use sunscreen
                     """,
                     'moderately_concerning': """
-                    **Moderadamente preocupante**: Se detectaron signos que requieren evaluación médica. 
-                    Se recomienda programar una cita con un dermatólogo en las próximas semanas
-                    para una evaluación profesional.
+                    **Moderately Concerning**: Signs have been detected that require medical evaluation. 
+                    It's recommended to schedule an appointment with a dermatologist in the coming weeks
+                    for a professional assessment.
                     
-                    **Recomendaciones:**
-                    - Programe una consulta con un dermatólogo en las próximas 2-3 semanas
-                    - Tome fotografías de la lesión para documentar su estado actual
-                    - Evite irritar o traumatizar la lesión
-                    - Proteja la zona de la exposición solar
+                    **Recommendations:**
+                    - Schedule a consultation with a dermatologist in the next 2-3 weeks
+                    - Take photographs of the lesion to document its current state
+                    - Avoid irritating or traumatizing the lesion
+                    - Protect the area from sun exposure
                     """,
                     'highly_concerning': """
-                    **Altamente preocupante**: Se detectaron signos serios que requieren atención médica inmediata. 
-                    Se recomienda consultar a un dermatólogo lo antes posible para una evaluación completa
-                    y posible biopsia.
+                    **Highly Concerning**: Serious signs have been detected that require immediate medical attention. 
+                    It's recommended to consult a dermatologist as soon as possible for a complete evaluation
+                    and possible biopsy.
                     
-                    **Recomendaciones:**
-                    - Busque atención dermatológica urgente (en los próximos días)
-                    - No intente tratar la lesión por su cuenta
-                    - Tome fotografías desde diferentes ángulos para el dermatólogo
-                    - Prepare un historial de cuándo notó la lesión y cómo ha cambiado
+                    **Recommendations:**
+                    - Seek urgent dermatological care (within the next few days)
+                    - Do not attempt to treat the lesion on your own
+                    - Take photographs from different angles for the dermatologist
+                    - Prepare a history of when you noticed the lesion and how it has changed
                     """
                 }
                 
@@ -884,18 +924,18 @@ def main():
                 # Add note about model agreement if applicable
                 if st.session_state.text_result and st.session_state.image_result:
                     if text_label == image_label:
-                        st.success("Ambos métodos de análisis coinciden en la clasificación, lo que aumenta la confianza en el diagnóstico.")
+                        st.success("Both analysis methods agree on the classification, increasing confidence in the diagnosis.")
                 
                 # Show warning about medical advice
                 st.warning("""
-                **Nota importante**: Esta clasificación es solo una herramienta de ayuda y no sustituye 
-                el diagnóstico médico profesional. Siempre consulte a un dermatólogo para una evaluación adecuada.
+                **Important note**: This classification is only an aid tool and does not substitute 
+                professional medical diagnosis. Always consult a dermatologist for proper evaluation.
                 """)
                 
                 # Navigation buttons
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("← Volver al cuestionario"):
+                    if st.button("← Back to Questionnaire"):
                         # Reset results to force recalculation
                         st.session_state.text_result = None
                         st.session_state.image_result = None
@@ -903,18 +943,67 @@ def main():
                         
                 
                 with col2:
-                    if st.button("← Volver a la imagen"):
+                    if st.button("← Back to Image"):
                         # Reset image result to force recalculation
                         st.session_state.image_result = None
                         st.session_state.step = 2
                         
             else:
-                st.error("No se pudo generar una clasificación válida. Por favor revise sus entradas o intente nuevamente.")
+                st.error("Could not generate a valid classification. Please check your inputs or try again.")
                 
                 # Back button
-                if st.button("← Volver al inicio"):
+                if st.button("← Back to Start"):
                     st.session_state.step = 1
                     
+    
+    with tab2:
+        st.header("Educational Information on Melanoma")
+        
+        
+        
+        st.subheader("🩺 DermaBot - Ask About Melanoma")
+        st.markdown("""
+            This chatbot provides educational information about melanomas.
+            **Important**: This bot does not provide medical diagnoses. 
+            Always consult a healthcare professional for specific cases.
+        """)
+            
+        # Initialize chatbot session state
+        if "chatbot_messages" not in st.session_state:
+            st.session_state.chatbot_messages = [
+                {"role": "assistant", "content": "Hi, I'm DermaBot, a virtual assistant specializing in melanoma information. How can I help you today?"}
+            ]
+            
+            # Load LLM model
+        with st.spinner("Loading medical AI model..."):
+            llm_model = load_llm_model()
+                
+        if llm_model is None:
+            st.error("Could not load the LLM model. Chat functionality is not available.")
+            st.info("You can still view the educational information on the left.")
+        else:
+            # Display chat messages
+            for message in st.session_state.chatbot_messages:
+                with st.chat_message(message["role"]):
+                    st.markdown(message["content"])
+                            # User input for chatbot
+            if prompt := st.chat_input("Ask a question about melanomas..."):
+                # Add user message to chat history
+                st.session_state.chatbot_messages.append({"role": "user", "content": prompt})                    
+                with st.chat_message("user"):
+                    st.markdown(prompt)
+                    
+                    # Generate and display response
+                with st.chat_message("assistant"):
+                    with st.spinner("Thinking..."):
+                        response = generate_response(prompt, llm_model)
+                        st.markdown(response)
+                    
+                    # Add assistant response to chat history
+                st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
+                    
+            # Add warning about medical advice
+        st.warning("⚠️ Remember: The information provided is not a substitute for professional medical advice.")
 
 if __name__ == "__main__":
     main()
