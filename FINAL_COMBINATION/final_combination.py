@@ -685,7 +685,7 @@ def main():
         st.warning("One or more models could not be loaded. Some functionality may be limited.")
     
     # Create tabs for different sections
-    tab1, tab2 = st.tabs(["Questionnaire & Diagnosis", "Results"])
+    tab1, tab2 = st.tabs(["Questionnaire & Diagnosis", "General information about Melanoma"])
     
     with tab1:
         # Store the state of the app
@@ -1119,8 +1119,7 @@ def main():
                             # Add assistant response to chat history
                             st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
                             
-                            # Rerun to update UI
-                            st.experimental_rerun()
+                
             
             # Text input for chatbot
             if prompt := st.chat_input("Ask a question about melanomas..."):
