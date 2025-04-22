@@ -11,9 +11,12 @@ from PIL import Image
 from io import BytesIO
 import os
 import traceback
+import tempfile
+import time
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from torchvision import models
-from llama_cpp import Llama  # Add import for LLama model
+from llama_cpp import Llama
+from audio_recorder_streamlit import audio_recorder  # Importamos el grabador de audio
 
 # Page configuration
 st.set_page_config(
@@ -22,6 +25,44 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Function to transcribe audio with Whisper - load model only when needed
+def transcribe_with_whisper(audio_path):
+    """Load whisper model and transcribe audio file"""
+    # Import whisper here to avoid early initialization issues
+    import whisper
+    
+    # Load model when function is called
+    model = whisper.load_model("base")  # Options: "tiny", "base", "small", "medium", "large"
+    
+    # Transcribe
+    result = model.transcribe(audio_path)
+    return result["text"].strip()
+
+# Function to process audio and get transcription
+def process_audio_to_text(audio_bytes):
+    """Process audio bytes and return transcribed text"""
+    if not audio_bytes:
+        return None
+        
+    # Save audio bytes to a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_audio:
+        temp_audio.write(audio_bytes)
+        temp_audio_path = temp_audio.name
+    
+    try:
+        # Transcribe with Whisper
+        with st.spinner("Transcribing your response..."):
+            transcription = transcribe_with_whisper(temp_audio_path)
+        return transcription
+    except Exception as e:
+        st.error(f"Transcription error: {e}")
+        st.error(traceback.format_exc())
+        return None
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(temp_audio_path):
+            os.remove(temp_audio_path)
 
 # Function to load data with better error handling
 @st.cache_data
@@ -580,7 +621,6 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
         position = 0.5  # Middle for error
     
 
-
 # Define the list of questions grouped by categories
 questions_by_category = {
     "Growth and Evolution": [
@@ -619,7 +659,7 @@ def main():
     st.title("Multi-Modal Melanoma Diagnostic System")
     st.write("""
     This advanced application combines the analysis of your responses with a computer vision model
-    to provide a more accurate assessment of melanoma risk. Complete the questionnaire and upload
+    to provide a more accurate assessment of melanoma risk. Complete the questionnaire (by text or voice) and upload
     an image of the lesion for a comprehensive analysis.
     """)
     
@@ -654,6 +694,9 @@ def main():
         
         if 'responses' not in st.session_state:
             st.session_state.responses = {}
+            
+        if 'audio_files' not in st.session_state:
+            st.session_state.audio_files = {}
         
         if 'text_result' not in st.session_state:
             st.session_state.text_result = None
@@ -667,7 +710,10 @@ def main():
         # Step 1: Complete questionnaire
         if st.session_state.step == 1:
             st.header("Skin Lesion Assessment Questionnaire")
-            st.write("Please answer the following questions about the skin lesion:")
+            st.write("Please answer the following questions about the skin lesion. You can type or record your answers:")
+            
+            # Toggle for input method selection
+            input_method = st.radio("Select your preferred input method:", ["Text", "Voice"], horizontal=True)
             
             # Create a multi-step form for each category
             all_completed = True
@@ -680,12 +726,60 @@ def main():
                         # Create a unique key for each question
                         question_key = f"q_{questions_by_category[category].index(question)}_{category}"
                         
-                        # Get response (use previous response if exists)
-                        response = st.text_input(
-                            question,
-                            value=st.session_state.responses.get(question_key, ""),
-                            key=question_key
-                        )
+                        # Display the question
+                        st.markdown(f"**{question}**")
+                        
+                        # Handle different input methods
+                        if input_method == "Text":
+                            # Get response (use previous response if exists)
+                            response = st.text_input(
+                                "Type your answer",
+                                value=st.session_state.responses.get(question_key, ""),
+                                key=f"text_{question_key}"
+                            )
+                        else:  # Voice input
+                            # Create columns for voice input and display
+                            col1, col2 = st.columns([1, 2])
+                            
+                            with col1:
+                                st.write("Record your answer:")
+                                
+                                # Add audio recorder with a unique key for each question
+                                audio_bytes = audio_recorder(
+                                    key=f"audio_{question_key}",
+                                    text="",
+                                    recording_color="#e8b62c",
+                                    neutral_color="#6aa36f",
+                                    icon_name="microphone",
+                                    icon_size="2x"
+                                )
+                                
+                                if audio_bytes:
+                                    # Display the recorded audio
+                                    st.audio(audio_bytes, format="audio/wav")
+                                    
+                                    # Store audio for later reference
+                                    st.session_state.audio_files[question_key] = audio_bytes
+                                    
+                                    # Transcribe audio
+                                    with st.spinner("Transcribing your response..."):
+                                        transcription = process_audio_to_text(audio_bytes)
+                                    
+                                    if transcription:
+                                        # Store the transcribed text
+                                        st.session_state.responses[question_key] = transcription
+                                        st.success(f"Transcribed: {transcription}")
+                            
+                            with col2:
+                                # Display previous response or transcribed text
+                                response = st.session_state.responses.get(question_key, "")
+                                
+                                # Allow editing the transcribed text
+                                response = st.text_input(
+                                    "Verify or edit your answer",
+                                    value=response,
+                                    key=f"edit_{question_key}"
+                                )
                         
                         # Store response
                         st.session_state.responses[question_key] = response
@@ -693,6 +787,9 @@ def main():
                         # Check if this question is completed
                         if not response.strip():
                             all_completed = False
+                        
+                        # Add some space between questions
+                        st.write("")
             
             # Continue button
             col1, col2 = st.columns([4, 1])
@@ -959,8 +1056,6 @@ def main():
     with tab2:
         st.header("Educational Information on Melanoma")
         
-        
-        
         st.subheader("🩺 DermaBot - Ask About Melanoma")
         st.markdown("""
             This chatbot provides educational information about melanomas.
@@ -974,7 +1069,7 @@ def main():
                 {"role": "assistant", "content": "Hi, I'm DermaBot, a virtual assistant specializing in melanoma information. How can I help you today?"}
             ]
             
-            # Load LLM model
+        # Load LLM model
         with st.spinner("Loading medical AI model..."):
             llm_model = load_llm_model()
                 
@@ -986,24 +1081,64 @@ def main():
             for message in st.session_state.chatbot_messages:
                 with st.chat_message(message["role"]):
                     st.markdown(message["content"])
-                            # User input for chatbot
+            
+            # Add voice input option for the chatbot
+            with st.expander("Ask with voice"):
+                st.write("Record your question:")
+                
+                audio_bytes = audio_recorder(
+                    key="chatbot_audio",
+                    text="",
+                    recording_color="#e8b62c",
+                    neutral_color="#6aa36f",
+                    icon_name="microphone",
+                    icon_size="2x"
+                )
+                
+                if audio_bytes:
+                    # Show the recorded audio
+                    st.audio(audio_bytes, format="audio/wav")
+                    
+                    # Transcribe audio
+                    with st.spinner("Transcribing your question..."):
+                        voice_question = process_audio_to_text(audio_bytes)
+                        
+                    if voice_question:
+                        # Show the transcribed question
+                        st.write("**Transcribed question:**")
+                        st.write(voice_question)
+                        
+                        if st.button("Send voice question"):
+                            # Add user message to chat history
+                            st.session_state.chatbot_messages.append({"role": "user", "content": voice_question})
+                            
+                            # Generate and display response
+                            with st.spinner("Thinking..."):
+                                response = generate_response(voice_question, llm_model)
+                            
+                            # Add assistant response to chat history
+                            st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
+                            
+                            # Rerun to update UI
+                            st.experimental_rerun()
+            
+            # Text input for chatbot
             if prompt := st.chat_input("Ask a question about melanomas..."):
                 # Add user message to chat history
                 st.session_state.chatbot_messages.append({"role": "user", "content": prompt})                    
                 with st.chat_message("user"):
                     st.markdown(prompt)
                     
-                    # Generate and display response
+                # Generate and display response
                 with st.chat_message("assistant"):
                     with st.spinner("Thinking..."):
                         response = generate_response(prompt, llm_model)
                         st.markdown(response)
                     
-                    # Add assistant response to chat history
+                # Add assistant response to chat history
                 st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
                     
-            # Add warning about medical advice
+        # Add warning about medical advice
         st.warning("⚠️ Remember: The information provided is not a substitute for professional medical advice.")
-
 if __name__ == "__main__":
     main()
