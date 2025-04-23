@@ -18,6 +18,20 @@ from torchvision import models
 from llama_cpp import Llama
 from audio_recorder_streamlit import audio_recorder  # Importamos el grabador de audio
 
+#librerias extra para el rag
+import re
+from typing import List, Dict, Tuple
+from pypdf import PdfReader
+# For splitting text into chunks
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+# For creating embeddings
+from sentence_transformers import SentenceTransformer
+
+# For vector search
+import faiss
+
+
 # Page configuration
 st.set_page_config(
     page_title="Melanoma Multi-Modal Classifier",
@@ -25,6 +39,16 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+#Introduccion RAG
+
+
+
+
+
+
+
+
 
 # Function to transcribe audio with Whisper - load model only when needed
 def transcribe_with_whisper(audio_path):
