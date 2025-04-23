@@ -17,7 +17,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from torchvision import models
 from llama_cpp import Llama
 from audio_recorder_streamlit import audio_recorder  # Importamos el grabador de audio
-
+import whisper
 #librerias extra para el rag
 import re
 from typing import List, Dict, Tuple
@@ -404,7 +404,7 @@ Answer:"""
 def transcribe_with_whisper(audio_path):
     """Load whisper model and transcribe audio file"""
     # Import whisper here to avoid early initialization issues
-    import whisper
+    
     
     # Load model when function is called
     model = whisper.load_model("base")  # Options: "tiny", "base", "small", "medium", "large"
@@ -1059,7 +1059,7 @@ def main():
         st.warning("One or more models could not be loaded. Some functionality may be limited.")
     
     # Create tabs for different sections
-    tab1, tab2 = st.tabs(["Questionnaire & Diagnosis", "General information about Melanoma"])
+    tab1, tab2, tab3 = st.tabs(["Questionnaire & Diagnosis", "General information about Melanoma", "Specific information"])
     
     with tab1:
         # Store the state of the app
