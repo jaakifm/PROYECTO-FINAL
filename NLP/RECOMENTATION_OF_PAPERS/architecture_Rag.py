@@ -214,7 +214,7 @@ else:
                     references = set(re.findall(r'\[Artículo: ([^\]]+)\]', result))
                     
                     if references:
-                        for ref in references:
+                        for i, ref in enumerate(references):
                             # Encontrar la ruta del archivo original
                             file_info = st.session_state.documents_df[
                                 st.session_state.documents_df['Nombre'] == ref
@@ -226,11 +226,13 @@ else:
                                 with col1:
                                     st.markdown(f"**{ref}**")
                                 with col2:
+                                    # Añadir clave única para cada botón de descarga
                                     st.download_button(
                                         label="Descargar",
                                         data=open(file_path, "rb"),
                                         file_name=ref,
-                                        mime="application/octet-stream"
+                                        mime="application/octet-stream",
+                                        key=f"download_reference_{ref}_{i}"  # Clave única
                                     )
                     else:
                         st.info("No se detectaron referencias específicas en la respuesta.")
@@ -252,11 +254,13 @@ else:
                             
                             if not file_info.empty:
                                 file_path = file_info.iloc[0]['Ruta']
+                                # Añadir clave única para cada botón de descarga
                                 st.download_button(
                                     label="Descargar artículo completo",
                                     data=open(file_path, "rb"),
                                     file_name=doc.metadata['source'],
-                                    mime="application/octet-stream"
+                                    mime="application/octet-stream",
+                                    key=f"download_doc_{doc.metadata['source']}_{i}"  # Clave única
                                 )
             except Exception as e:
                 st.error(f"Error al procesar la consulta: {str(e)}")
