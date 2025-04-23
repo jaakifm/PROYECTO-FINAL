@@ -42,8 +42,358 @@ st.set_page_config(
 
 #Introduccion RAG
 
+def clean_llm_output(text):
+    """
+    Clean the LLM output to remove duplicate content and internal tokens.
+    
+    Args:
+        text: Raw text from LLM
+        
+    Returns:
+        Cleaned text
+    """
+    # Remove any <think> or </think> tags and content between them
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    
+    # Remove standalone </think> tags
+    text = re.sub(r'</think>', '', text)
+    
+    # Remove any userStyle tags
+    text = re.sub(r'<userStyle>.*?</userStyle>', '', text, flags=re.DOTALL)
+    
+    # Find duplicate paragraphs (common in some LLM outputs)
+    paragraphs = text.split('\n\n')
+    unique_paragraphs = []
+    
+    for p in paragraphs:
+        # Clean and standardize for comparison
+        cleaned_p = p.strip()
+        if cleaned_p and cleaned_p not in unique_paragraphs:
+            unique_paragraphs.append(cleaned_p)
+    
+    # Reassemble the text
+    cleaned_text = '\n\n'.join(unique_paragraphs)
+    
+    # Additional cleanup for any remaining artifacts
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Normalize whitespace
+    cleaned_text = cleaned_text.strip()
+    
+    return cleaned_text
 
 
+class MelanomaRAGSystem:
+    def __init__(self, model_name="all-MiniLM-L6-v2", llm_path=None):
+        """
+        Initialize the RAG system for melanoma.
+        
+        Args:
+            model_name: Embedding model to use
+            llm_path: Path to the local LLM model
+        """
+        self.model = SentenceTransformer(model_name)
+        self.chunks = []
+        self.embeddings = None
+        self.index = None
+        self.text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=512,
+            chunk_overlap=50,
+            separators=["\n\n", "\n", ". ", " ", ""]
+        )
+        # To store filenames and their metadata
+        self.doc_metadata = {}
+        
+        # Initialize the local LLM if a path is provided
+        self.llm = None
+        self.llm_path = llm_path
+        if llm_path and os.path.exists(llm_path):
+            try:
+                with st.spinner("Loading local LLM model... This may take a moment."):
+                    self.llm = Llama(
+                        model_path=llm_path,
+                        n_ctx=4096,         # Context window size
+                        n_threads=4,        # Number of CPU threads to use
+                        n_gpu_layers=0      # Set higher if you have a GPU
+                    )
+                st.sidebar.success("✅ Local LLM loaded successfully!")
+            except Exception as e:
+                st.sidebar.error(f"Failed to load local LLM: {str(e)}")
+                st.sidebar.warning("The system will fall back to basic text retrieval.")
+
+    def extract_text_from_pdf(self, pdf_file, filename: str) -> str:
+        """
+        Extract text from a PDF file.
+        
+        Args:
+            pdf_file: PDF file (BytesIO)
+            filename: Filename
+            
+        Returns:
+            Extracted text from PDF
+        """
+        reader = PdfReader(pdf_file)
+        text = ""
+        
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+            
+        # Basic text cleaning
+        text = re.sub(r'\s+', ' ', text)  # Replace multiple spaces with one
+        
+        return text
+    
+    def process_uploaded_files(self, uploaded_files) -> None:
+        """
+        Process multiple uploaded PDF documents and create the search index.
+        
+        Args:
+            uploaded_files: List of files uploaded through Streamlit
+        """
+        all_chunks = []
+        
+        for uploaded_file in uploaded_files:
+            try:
+                # Extract text from PDF
+                text = self.extract_text_from_pdf(uploaded_file, uploaded_file.name)
+                
+                # Split text into chunks
+                chunks = self.text_splitter.split_text(text)
+                
+                # Add metadata (document source)
+                doc_chunks = [
+                    {"content": chunk, "source": uploaded_file.name}
+                    for chunk in chunks
+                ]
+                
+                all_chunks.extend(doc_chunks)
+                
+                # Save document information
+                self.doc_metadata[uploaded_file.name] = {
+                    "total_chunks": len(chunks),
+                    "size": uploaded_file.size,
+                    "type": uploaded_file.type
+                }
+                
+                st.sidebar.success(f"Processed: {uploaded_file.name} - {len(chunks)} chunks extracted")
+                
+            except Exception as e:
+                st.sidebar.error(f"Error processing {uploaded_file.name}: {str(e)}")
+        
+        self.chunks.extend(all_chunks)
+        
+        # Create embeddings and search index
+        self._create_index()
+        
+        st.sidebar.success(f"Processing complete: {len(self.chunks)} total chunks")
+    
+    def _create_index(self) -> None:
+        """
+        Create embeddings for all chunks and build the FAISS index.
+        """
+        if not self.chunks:
+            st.warning("No chunks to index")
+            return
+            
+        # Extract only the content of the chunks to create embeddings
+        texts = [chunk["content"] for chunk in self.chunks]
+        
+        with st.spinner('Creating embeddings... This may take a moment'):
+            # Create embeddings
+            self.embeddings = self.model.encode(texts)
+            
+            # Normalize embeddings for cosine similarity search
+            faiss.normalize_L2(self.embeddings)
+            
+            # Create FAISS index
+            vector_dimension = self.embeddings.shape[1]
+            self.index = faiss.IndexFlatIP(vector_dimension)  # Inner product index (cosine similarity)
+            self.index.add(self.embeddings)
+        
+        st.sidebar.info(f"Index created with dimension {vector_dimension}")
+    
+    def search(self, query: str, top_k: int = 5) -> List[Dict]:
+        """
+        Search for the most relevant chunks for a query.
+        
+        Args:
+            query: User query
+            top_k: Number of results to return
+            
+        Returns:
+            List of most relevant chunks with their scores
+        """
+        if not self.index:
+            st.warning("Index has not been created. Upload and process documents first.")
+            return []
+            
+        # Create embedding for the query
+        query_embedding = self.model.encode([query])
+        
+        # Normalize for cosine similarity search
+        faiss.normalize_L2(query_embedding)
+        
+        # Search the index
+        scores, indices = self.index.search(query_embedding, top_k)
+        
+        # Prepare results
+        results = []
+        for i, idx in enumerate(indices[0]):
+            if idx != -1:  # -1 indicates that not enough results were found
+                results.append({
+                    "content": self.chunks[idx]["content"],
+                    "source": self.chunks[idx]["source"],
+                    "score": float(scores[0][i])
+                })
+                
+        return results
+    
+    def answer_query(self, query: str, top_k: int = 5, use_llm: bool = True) -> Dict:
+        """
+        Answer a query based on retrieved documents.
+        
+        Args:
+            query: User query
+            top_k: Number of chunks to retrieve
+            use_llm: Whether to use the LLM for answer generation
+            
+        Returns:
+            Dictionary with answer and context
+        """
+        # Retrieve relevant documents
+        relevant_docs = self.search(query, top_k=top_k)
+        
+        if not relevant_docs:
+            return {
+                "answer": "No relevant information found for this query.",
+                "sources": [],
+                "context": []
+            }
+        
+        # Extract unique sources
+        sources = list(set([doc["source"] for doc in relevant_docs]))
+        
+        # Build context
+        context = [f"{i+1}. {doc['content']} (Score: {doc['score']:.4f})" for i, doc in enumerate(relevant_docs)]
+        raw_context = [doc["content"] for doc in relevant_docs]
+        
+        # Generate answer
+        if use_llm and self.llm is not None:
+            try:
+                # Construct the prompt for the LLM
+                combined_context = "\n\n".join(raw_context)
+                
+                prompt = f"""You are a helpful medical AI assistant specializing in melanoma research. 
+Use only the information provided in the context to answer the question.
+Provide a concise and focused answer based solely on the information in the context.
+If the context doesn't contain enough information to answer the question fully, 
+acknowledge the limitations of your knowledge.
+
+Context:
+{combined_context}
+
+Question: {query}
+
+Answer:"""
+                
+                # Generate response with the local LLM
+                with st.spinner("Generating answer with local LLM..."):
+                    llm_response = self.llm(
+                        prompt,
+                        max_tokens=1024,
+                        stop=["Question:", "Context:"],
+                        echo=False
+                    )
+                
+                raw_answer = llm_response["choices"][0]["text"].strip()
+                
+                # Clean up the response
+                answer = clean_llm_output(raw_answer)
+                
+                is_llm_generated = True
+                
+            except Exception as e:
+                # Fallback to basic concatenation if LLM fails
+                st.warning(f"LLM generation failed: {str(e)}. Falling back to basic retrieval.")
+                answer = (
+                    f"Based on the consulted documents, we found the following relevant information "
+                    f"about '{query}':\n\n" + "\n\n".join(raw_context)
+                )
+                is_llm_generated = False
+        else:
+            # Basic concatenation of retrieved content
+            answer = (
+                f"Based on the consulted documents, we found the following relevant information "
+                f"about '{query}':\n\n" + "\n\n".join(raw_context)
+            )
+            is_llm_generated = False
+        
+        return {
+            "answer": answer,
+            "sources": sources,
+            "context": context,
+            "is_llm_generated": is_llm_generated
+        }
+
+    def extract_melanoma_terms(self, result_context: List[str]) -> List[str]:
+        """
+        Extract specific terms related to melanoma from the retrieved context.
+        
+        Args:
+            result_context: List of text fragments from the retrieved context
+            
+        Returns:
+            List of specific melanoma terms
+        """
+        # List of common terms related to melanoma
+        # In a real implementation, this could be much more sophisticated
+        melanoma_terms = [
+            "melanoma", "nevus", "ABCDE", "Breslow", "Clark", "metastasis", 
+            "melanocyte", "melanin", "nodular", "lentigo maligna", "acral", 
+            "BRAF", "immunotherapy", "staging", "dermatoscopy", "biopsy",
+            "AJCC", "TNM", "mitosis", "ulceration", "regression", "sentinel",
+            "dermoscopy", "mitotic index", "micrometastasis", "PD-1",
+            "PD-L1", "CTLA-4", "epithelioid", "spindle-shaped", "MAPK", "MEK",
+            "radiotherapy", "chemotherapy", "adjuvant therapy"
+        ]
+        
+        # Search for terms in the context
+        found_terms = set()
+        term_contexts = {}
+        
+        for fragment in result_context:
+            fragment_lower = fragment.lower()
+            for term in melanoma_terms:
+                if term.lower() in fragment_lower:
+                    found_terms.add(term)
+                    # Capture a context phrase for the term
+                    term_index = fragment_lower.find(term.lower())
+                    start = max(0, term_index - 50)
+                    end = min(len(fragment), term_index + len(term) + 50)
+                    context_phrase = fragment[start:end].strip()
+                    term_contexts[term] = context_phrase
+        
+        # Sort terms alphabetically
+        found_terms = sorted(list(found_terms))
+        
+        return found_terms, term_contexts
+
+    def suggest_readings(self, query: str, top_k: int = 3) -> List[str]:
+        """
+        Suggest papers for reading based on the query.
+        
+        Args:
+            query: User query
+            top_k: Maximum number of articles to suggest
+            
+        Returns:
+            List of suggested sources
+        """
+        relevant_docs = self.search(query, top_k=top_k*2)  # Search for more to get variety
+        
+        # Extract unique sources
+        sources = list(set([doc["source"] for doc in relevant_docs]))
+        
+        # Limit to the requested number
+        return sources[:top_k]
 
 
 
