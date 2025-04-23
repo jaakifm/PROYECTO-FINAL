@@ -1426,7 +1426,7 @@ def main():
                 if st.button("← Back to Start"):
                     st.session_state.step = 1
                     
-    
+
     with tab2:
         st.header("Educational Information on Melanoma")
         
@@ -1510,8 +1510,155 @@ def main():
                     
                 # Add assistant response to chat history
                 st.session_state.chatbot_messages.append({"role": "assistant", "content": response})
-                    
         # Add warning about medical advice
         st.warning("⚠️ Remember: The information provided is not a substitute for professional medical advice.")
+    with tab3:
+        st.header("Specific Information on Melanoma through Scientific Articles")
+        st.write("This section provides information from scientific articles and recommend interesting links.")    
+
+
+        default_llm_path = r"C:\Users\jakif\.lmstudio\models\lmstudio-community\DeepSeek-R1-Distill-Llama-8B-GGUF\DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf"
+        # Initialize the RAG system in the session state
+        if 'melanoma_rag' not in st.session_state:
+            # Sidebar for LLM model settings
+            with st.sidebar:
+                st.header("🧠 LLM Model Settings")
+                use_custom_model = st.checkbox("Use custom LLM model path", value=False)
+                
+                if use_custom_model:
+                    llm_path = st.text_input("Path to local LLM model (GGUF format)", value=default_llm_path)
+                else:
+                    llm_path = default_llm_path
+                
+                # Check if model exists
+                if not os.path.exists(llm_path):
+                    st.error(f"Model not found at: {llm_path}")
+                    st.info("The system will run without LLM capabilities.")
+                    llm_path = None
+            
+            st.session_state.melanoma_rag = MelanomaRAGSystem(llm_path=llm_path)
+            st.session_state.uploaded_files = []
+            st.session_state.has_processed = False
+            st.session_state.query_history = []
+            st.session_state.llm_path = llm_path
+        
+        # Sidebar for uploading files
+        st.sidebar.title("📁 Upload Documents")
+        uploaded_files = st.sidebar.file_uploader(
+            "Upload PDFs of scientific articles",
+            type=["pdf"],
+            accept_multiple_files=True
+        )
+        
+        # If new files have been uploaded
+        if uploaded_files and uploaded_files != st.session_state.uploaded_files:
+            st.session_state.uploaded_files = uploaded_files
+            st.session_state.has_processed = False
+        
+        # Button to process files
+        if st.sidebar.button("Process Documents") and st.session_state.uploaded_files:
+            st.session_state.melanoma_rag.process_uploaded_files(st.session_state.uploaded_files)
+            st.session_state.has_processed = True
+        
+        # Show statistics of processed documents
+        if st.session_state.has_processed:
+            st.sidebar.header("📊 Statistics")
+            st.sidebar.info(f"Total documents: {len(st.session_state.melanoma_rag.doc_metadata)}")
+            st.sidebar.info(f"Total chunks: {len(st.session_state.melanoma_rag.chunks)}")
+            
+            # List of documents
+            st.sidebar.header("📑 Processed Documents")
+            for doc_name, metadata in st.session_state.melanoma_rag.doc_metadata.items():
+                st.sidebar.markdown(f"**{doc_name}**")
+                st.sidebar.markdown(f"- Chunks: {metadata['total_chunks']}")
+                st.sidebar.markdown(f"- Size: {metadata['size']/1024:.2f} KB")
+        
+        # Main area
+        if st.session_state.has_processed:
+            # Query
+            st.header("🔎 Make a Query")
+            query = st.text_input("What would you like to know about melanoma?", 
+                                placeholder="E.g.: What are the risk factors for melanoma?")
+            
+            top_k = st.slider("Number of chunks to retrieve", min_value=1, max_value=10, value=5)
+            
+            # Option to use LLM or not
+            use_llm = st.checkbox("Use Local LLM to generate response", value=True)
+            if use_llm and st.session_state.melanoma_rag.llm is None:
+                st.warning("Local LLM not available. Response will use basic text retrieval.")
+            
+            col1, col2 = st.columns([1, 3])
+            search_button = col1.button("Search")
+            clear_button = col2.button("Clear results")
+            
+            if clear_button:
+                st.session_state.query_history = []
+                st.experimental_rerun()
+            
+            # Perform search
+            if search_button and query:
+                with st.spinner('Querying documents...'):
+                    result = st.session_state.melanoma_rag.answer_query(
+                        query=query, 
+                        top_k=top_k,
+                        use_llm=use_llm
+                    )
+                    terms, term_contexts = st.session_state.melanoma_rag.extract_melanoma_terms(result["context"])
+                    suggested_readings = st.session_state.melanoma_rag.suggest_readings(query)
+                    
+                    # Save to history
+                    st.session_state.query_history.append({
+                        "query": query,
+                        "result": result,
+                        "terms": terms,
+                        "term_contexts": term_contexts,
+                        "readings": suggested_readings
+                    })
+            
+            # Show results from history
+            if st.session_state.query_history:
+                st.header("📝 Results")
+                
+                # Create tabs for each query
+                tabs = st.tabs([f"Query: {item['query'][:20]}..." for item in reversed(st.session_state.query_history)])
+                
+                for i, (tab, item) in enumerate(zip(tabs, reversed(st.session_state.query_history))):
+                    with tab:
+                        st.subheader("Query")
+                        st.write(item['query'])
+                        
+                        st.subheader("Answer")
+                        if item['result'].get('is_llm_generated', False):
+                            st.markdown("*Response generated by local LLM*")
+                        else:
+                            st.markdown("*Basic retrieval response*")
+                        st.write(item['result']['answer'])
+                        
+                        
+                        # Recommended readings
+                        st.subheader("📖 Recommended Readings")
+                        for reading in item['readings']:
+                            st.markdown(f"- {reading}")
+                        
+                        # Show detailed results
+                        with st.expander("View full context"):
+                            for ctx in item['result']['context']:
+                                st.markdown(f"**{ctx}**")
+                                st.markdown("---")
+        else:
+            # Show message if no documents have been processed
+            st.info("👈 Please upload some PDF documents and click 'Process Documents' to begin.")
+            
+            # Example usage
+            st.header("🧪 Usage Example")
+            st.markdown("""
+            1. Upload PDFs of scientific articles on melanoma using the sidebar.
+            2. Click "Process Documents" to index the content.
+            3. Type a query like "What are the prognostic factors for melanoma?"
+            4. Toggle the "Use Local LLM" option to switch between basic retrieval and LLM-generated responses.
+            5. Explore the results, specific terms, and recommended readings.
+            """)            
+            # Add warning about medical advice
+            st.warning("⚠️ Remember: The information provided is not a substitute for professional medical advice.")
 if __name__ == "__main__":
     main()
