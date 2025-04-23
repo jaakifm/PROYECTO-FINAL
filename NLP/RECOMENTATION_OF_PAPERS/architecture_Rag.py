@@ -26,6 +26,45 @@ import faiss
 from llama_cpp import Llama
 
 
+def clean_llm_output(text):
+    """
+    Clean the LLM output to remove duplicate content and internal tokens.
+    
+    Args:
+        text: Raw text from LLM
+        
+    Returns:
+        Cleaned text
+    """
+    # Remove any <think> or </think> tags and content between them
+    text = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL)
+    
+    # Remove standalone </think> tags
+    text = re.sub(r'</think>', '', text)
+    
+    # Remove any userStyle tags
+    text = re.sub(r'<userStyle>.*?</userStyle>', '', text, flags=re.DOTALL)
+    
+    # Find duplicate paragraphs (common in some LLM outputs)
+    paragraphs = text.split('\n\n')
+    unique_paragraphs = []
+    
+    for p in paragraphs:
+        # Clean and standardize for comparison
+        cleaned_p = p.strip()
+        if cleaned_p and cleaned_p not in unique_paragraphs:
+            unique_paragraphs.append(cleaned_p)
+    
+    # Reassemble the text
+    cleaned_text = '\n\n'.join(unique_paragraphs)
+    
+    # Additional cleanup for any remaining artifacts
+    cleaned_text = re.sub(r'\s+', ' ', cleaned_text)  # Normalize whitespace
+    cleaned_text = cleaned_text.strip()
+    
+    return cleaned_text
+
+
 class MelanomaRAGSystem:
     def __init__(self, model_name="all-MiniLM-L6-v2", llm_path=None):
         """
@@ -227,7 +266,8 @@ class MelanomaRAGSystem:
                 combined_context = "\n\n".join(raw_context)
                 
                 prompt = f"""You are a helpful medical AI assistant specializing in melanoma research. 
-Use only the information provided in the context to answer the question. 
+Use only the information provided in the context to answer the question.
+Provide a concise and focused answer based solely on the information in the context.
 If the context doesn't contain enough information to answer the question fully, 
 acknowledge the limitations of your knowledge.
 
@@ -247,7 +287,11 @@ Answer:"""
                         echo=False
                     )
                 
-                answer = llm_response["choices"][0]["text"].strip()
+                raw_answer = llm_response["choices"][0]["text"].strip()
+                
+                # Clean up the response
+                answer = clean_llm_output(raw_answer)
+                
                 is_llm_generated = True
                 
             except Exception as e:
@@ -468,20 +512,6 @@ def main():
                         st.markdown("*Basic retrieval response*")
                     st.write(item['result']['answer'])
                     
-                    st.subheader("Sources")
-                    for source in item['result']['sources']:
-                        st.markdown(f"- {source}")
-                    
-                    # Show relevant terms (without nested expanders)
-                    if item['terms']:
-                        st.subheader("📚 Specific Terms Found")
-                        terms_table = []
-                        for term in item['terms']:
-                            terms_table.append({
-                                "Term": term,
-                                "Context": item['term_contexts'].get(term, 'Not available')
-                            })
-                        st.table(terms_table)
                     
                     # Recommended readings
                     st.subheader("📖 Recommended Readings")
