@@ -281,11 +281,26 @@ class MelanomaRAGSystem:
                 # Construct the prompt for the LLM
                 combined_context = "\n\n".join(raw_context)
                 
-                prompt = f"""You are a helpful medical AI assistant specializing in melanoma research. 
-Use only the information provided in the context to answer the question.
-Provide a concise and focused answer based solely on the information in the context.
-If the context doesn't contain enough information to answer the question fully, 
-acknowledge the limitations of your knowledge.
+                prompt = f"""You are a precision-focused melanoma research AI assistant. Follow these rules strictly:
+
+1. SOURCING & NON-REPETITION:
+- Use ONLY information from the provided context, marked with "Context:" 
+- Never repeat the same fact, even if rephrased
+- For repeated queries, respond: "Per previous context: [1-sentence summary]"
+- Combine duplicate facts across context documents into one definitive statement
+
+2. RESPONSE STRUCTURE:
+Context:
+- [Relevant source name/location]
+- Key finding: [Exact statistic/claim]
+- Gap: [Missing information]
+
+[Non-context]: [ONLY if critical for safety/understanding]
+
+3. PROHIBITED:
+- No general knowledge unless labeled [Non-context]
+- No rephrasing of already stated facts
+- No "in conclusion" or summary unless new context exists
 
 Context:
 {combined_context}
@@ -676,6 +691,9 @@ def generate_response(prompt, model):
     - Prevention methods
     - Diagnosis and treatment options
     - When to seek medical attention
+    -Critical information
+    - Common misconceptions
+    - Statistics and research findings
 
     Remember that you are not diagnosing specific cases and should always recommend consulting a physician for individual cases. Base your answers on up-to-date scientific evidence.
     """
@@ -1039,7 +1057,31 @@ def main():
     
     # Load data
     data = load_data()
-    
+    default_llm_path = r"C:\Users\jakif\.lmstudio\models\lmstudio-community\DeepSeek-R1-Distill-Llama-8B-GGUF\DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf"
+        
+        # Initialize the RAG system in the session state
+    if 'melanoma_rag' not in st.session_state:
+        # Sidebar for LLM model settings
+        with st.sidebar:
+            st.header("🧠 LLM Model Settings")
+            use_custom_model = st.checkbox("Use custom LLM model path", value=False)
+                
+            if use_custom_model:
+                llm_path = st.text_input("Path to local LLM model (GGUF format)", value=default_llm_path)
+            else:
+                llm_path = default_llm_path
+                
+                # Check if model exists
+            if not os.path.exists(llm_path):
+                st.error(f"Model not found at: {llm_path}")
+                st.info("The system will run without LLM capabilities.")
+                llm_path = None
+            
+        st.session_state.melanoma_rag = MelanomaRAGSystem(llm_path=llm_path)
+        st.session_state.uploaded_files = []
+        st.session_state.has_processed = False
+        st.session_state.query_history = []
+        st.session_state.llm_path = llm_path
     if not data or "data" not in data or not data["data"]:
         st.error("No data available for analysis.")
         return
@@ -1081,16 +1123,45 @@ def main():
         if 'uploaded_image' not in st.session_state:
             st.session_state.uploaded_image = None
         
+        # First, add a new function to classify single responses
+        def classify_single_response(response, model, tokenizer, id_to_label):
+            """Classify a single response and return its concern level"""
+            if not response.strip() or not model or not tokenizer:
+                return None, 0.0, {}
+            
+            try:
+                # Use the existing classification function
+                label_name, score, class_probs = classify_text_response(response, model, tokenizer, id_to_label)
+                return label_name, score, class_probs
+            except Exception as e:
+                st.error(f"Error classifying response: {str(e)}")
+                return None, 0.0, {}
         # Step 1: Complete questionnaire
         if st.session_state.step == 1:
             st.header("Skin Lesion Assessment Questionnaire")
             st.write("Please answer the following questions about the skin lesion. You can type or record your answers:")
+            
+            # Make sure models are loaded before using them
+            tokenizer, text_model = load_text_model(label_to_id, id_to_label)
+            
+            # Store classifications in session state if not already present
+            if 'response_classifications' not in st.session_state:
+                st.session_state.response_classifications = {}
             
             # Toggle for input method selection
             input_method = st.radio("Select your preferred input method:", ["Text", "Voice"], horizontal=True)
             
             # Create a multi-step form for each category
             all_completed = True
+            
+            # Define colors for different concern levels
+            concern_colors = {
+                'not_concerning': '#4CAF50',  # Green
+                'mildly_concerning': '#FFEB3B',  # Yellow
+                'moderately_concerning': '#FF9800',  # Orange
+                'highly_concerning': '#F44336',  # Red
+                'error': '#9E9E9E'  # Gray
+            }
             
             for category, questions in questions_by_category.items():
                 with st.expander(f"{category}", expanded=True):
@@ -1103,14 +1174,38 @@ def main():
                         # Display the question
                         st.markdown(f"**{question}**")
                         
+                        # Save previous response if exists
+                        previous_response = st.session_state.responses.get(question_key, "")
+                        
                         # Handle different input methods
                         if input_method == "Text":
                             # Get response (use previous response if exists)
                             response = st.text_input(
                                 "Type your answer",
-                                value=st.session_state.responses.get(question_key, ""),
+                                value=previous_response,
                                 key=f"text_{question_key}"
                             )
+                            
+                            # Check if a new response was entered (by comparing with previous)
+                            if response != previous_response and response.strip():
+                                # Classify the response immediately
+                                if text_model and tokenizer:
+                                    label, score, _ = classify_single_response(response, text_model, tokenizer, id_to_label)
+                                    
+                                    if label:
+                                        # Store the classification
+                                        st.session_state.response_classifications[question_key] = label
+                                        
+                                        # Display the classification with appropriate styling
+                                        concern_color = concern_colors.get(label, '#9E9E9E')
+                                        st.markdown(
+                                            f"""
+                                            <div style="padding: 10px; border-radius: 5px; background-color: {concern_color}; color: white;">
+                                            <strong>Classification:</strong> {label.replace('_', ' ').title()} (Confidence: {score:.2f})
+                                            </div>
+                                            """, 
+                                            unsafe_allow_html=True
+                                        )
                         else:  # Voice input
                             # Create columns for voice input and display
                             col1, col2 = st.columns([1, 2])
@@ -1142,21 +1237,75 @@ def main():
                                     if transcription:
                                         # Store the transcribed text
                                         st.session_state.responses[question_key] = transcription
-                                        st.success(f"Transcribed: {transcription}")
-                            
+                                        
+                                        # Classify the transcribed response
+                                        if text_model and tokenizer:
+                                            label, score, _ = classify_single_response(transcription, text_model, tokenizer, id_to_label)
+                                            
+                                            if label:
+                                                # Store the classification
+                                                st.session_state.response_classifications[question_key] = label
+                                                
+                                                # Display classification with appropriate styling
+                                                concern_color = concern_colors.get(label, '#9E9E9E')
+                                                st.markdown(
+                                                    f"""
+                                                    <div style="padding: 10px; border-radius: 5px; background-color: {concern_color}; color: white;">
+                                                    <strong>Classification:</strong> {label.replace('_', ' ').title()} (Confidence: {score:.2f})
+                                                    </div>
+                                                    """, 
+                                                    unsafe_allow_html=True
+                                                )
+
                             with col2:
                                 # Display previous response or transcribed text
                                 response = st.session_state.responses.get(question_key, "")
                                 
                                 # Allow editing the transcribed text
-                                response = st.text_input(
+                                new_response = st.text_input(
                                     "Verify or edit your answer",
                                     value=response,
                                     key=f"edit_{question_key}"
                                 )
+                                
+                                # Check if response was edited
+                                if new_response != response and new_response.strip():
+                                    # Classify the edited response
+                                    if text_model and tokenizer:
+                                        label, score, _ = classify_single_response(new_response, text_model, tokenizer, id_to_label)
+                                        
+                                        if label:
+                                            # Store the classification
+                                            st.session_state.response_classifications[question_key] = label
+                                            
+                                            # Display classification with appropriate styling
+                                            concern_color = concern_colors.get(label, '#9E9E9E')
+                                            st.markdown(
+                                                f"""
+                                                <div style="padding: 10px; border-radius: 5px; background-color: {concern_color}; color: white;">
+                                                <strong>Classification:</strong> {label.replace('_', ' ').title()} (Confidence: {score:.2f})
+                                                </div>
+                                                """, 
+                                                unsafe_allow_html=True
+                                            )
+                                
+                                response = new_response
                         
                         # Store response
                         st.session_state.responses[question_key] = response
+                        
+                        # Display existing classification if available
+                        if question_key in st.session_state.response_classifications and not (response != previous_response and response.strip()):
+                            label = st.session_state.response_classifications[question_key]
+                            concern_color = concern_colors.get(label, '#9E9E9E')
+                            st.markdown(
+                                f"""
+                                <div style="padding: 10px; border-radius: 5px; background-color: {concern_color}; color: white;">
+                                <strong>Classification:</strong> {label.replace('_', ' ').title()}
+                                </div>
+                                """, 
+                                unsafe_allow_html=True
+                            )
                         
                         # Check if this question is completed
                         if not response.strip():
@@ -1177,7 +1326,6 @@ def main():
                 if continue_button:
                     # Proceed to image upload
                     st.session_state.step = 2
-                    
         
         # Step 2: Upload image
         elif st.session_state.step == 2:
@@ -1517,30 +1665,7 @@ def main():
         st.write("This section provides information from scientific articles and recommend interesting links.")    
 
 
-        default_llm_path = r"C:\Users\jakif\.lmstudio\models\lmstudio-community\DeepSeek-R1-Distill-Llama-8B-GGUF\DeepSeek-R1-Distill-Llama-8B-Q4_K_M.gguf"
-        # Initialize the RAG system in the session state
-        if 'melanoma_rag' not in st.session_state:
-            # Sidebar for LLM model settings
-            with st.sidebar:
-                st.header("🧠 LLM Model Settings")
-                use_custom_model = st.checkbox("Use custom LLM model path", value=False)
-                
-                if use_custom_model:
-                    llm_path = st.text_input("Path to local LLM model (GGUF format)", value=default_llm_path)
-                else:
-                    llm_path = default_llm_path
-                
-                # Check if model exists
-                if not os.path.exists(llm_path):
-                    st.error(f"Model not found at: {llm_path}")
-                    st.info("The system will run without LLM capabilities.")
-                    llm_path = None
-            
-            st.session_state.melanoma_rag = MelanomaRAGSystem(llm_path=llm_path)
-            st.session_state.uploaded_files = []
-            st.session_state.has_processed = False
-            st.session_state.query_history = []
-            st.session_state.llm_path = llm_path
+
         
         # Sidebar for uploading files
         st.sidebar.title("📁 Upload Documents")

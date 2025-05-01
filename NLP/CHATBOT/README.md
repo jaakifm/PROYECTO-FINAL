@@ -14,7 +14,7 @@ The first step in the project involves creating a basic chatbot using lemmatizat
 
 ### 2. **Rule Based Model**
 
-
+![rule based model](rules_based.png)
 
 ### 3. **Naive Bayes Model**
 The second stage involves building a more advanced chatbot using a Naive Bayes classification model. This model is implemented in the script [`modelo_naive_bayes.ipynb`](modelo_naive_bayes.ipynb).
@@ -30,6 +30,8 @@ The second stage involves building a more advanced chatbot using a Naive Bayes c
   ![RESULTS_NAIVE_BAYES](results_naive_bayes.png)
 
 
+To improve the adquision of information we develop a improved model:
+  ![CHATBOT_NAIVE_BAYES](chatbot_improved_naive_bayes.png)
 
 
 ## How to Use
