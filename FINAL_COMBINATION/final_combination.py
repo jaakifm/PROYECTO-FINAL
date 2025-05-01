@@ -574,69 +574,190 @@ def load_text_model(label_to_id, id_to_label):
 @st.cache_resource
 def load_vision_model():
     try:
-        model_path = "./melanoma_model_1_torch_RESNET50_harvard.pth"
+        # Update path to the optimized ensemble model
+        model_path = "C:/Users/jakif/CODE/PROYECTO-FINAL/COMPUTER_VISION/Ensamblado_mejores_modelos/optimized_ensemble_model.pth"
+        
         # Check if vision model exists
         if not os.path.exists(model_path):
-            st.error(f"Vision model not found. Please make sure the model is available at '{model_path}'.")
+            st.error(f"Optimized ensemble model not found. Please make sure the model is available at '{model_path}'.")
             return None
         
-        # Create a custom model handler class that deals with the size mismatch
-        class CustomResNet(torch.nn.Module):
+        # Define the paths to the base models needed for the ensemble
+        vit_model_path = "C:/Users/jakif/CODE/PROYECTO-FINAL/COMPUTER_VISION/vision_transformers/best_vit_model.pth"
+        efficient_model_path = "C:/Users/jakif/CODE/PROYECTO-FINAL/COMPUTER_VISION/melanoma_model_1_torch_EFFICIENTNETB0_harvard_attention.pth"
+        
+        if not os.path.exists(vit_model_path) or not os.path.exists(efficient_model_path):
+            st.error(f"Base models not found. Make sure ViT and EfficientNet models are available.")
+            return None
+        
+        # Define the necessary model architecture classes
+        class SEBlock(torch.nn.Module):
+            def __init__(self, channel, reduction=16):
+                super(SEBlock, self).__init__()
+                self.avg_pool = torch.nn.AdaptiveAvgPool2d(1)
+                self.fc = torch.nn.Sequential(
+                    torch.nn.Linear(channel, channel // reduction, bias=False),
+                    torch.nn.ReLU(inplace=True),
+                    torch.nn.Linear(channel // reduction, channel, bias=False),
+                    torch.nn.Sigmoid()
+                )
+
+            def forward(self, x):
+                b, c, _, _ = x.size()
+                y = self.avg_pool(x).view(b, c)
+                y = self.fc(y).view(b, c, 1, 1)
+                return x * y.expand_as(x)
+        
+        class SEEfficientNet(torch.nn.Module):
             def __init__(self, num_classes=1):
-                super(CustomResNet, self).__init__()
-                # Load the base ResNet50 model
-                self.backbone = models.resnet50(pretrained=False)
-                # Remove the final fully connected layer
-                in_features = self.backbone.fc.in_features
-                self.backbone.fc = torch.nn.Identity()
-                # Add our own classifier layer
-                self.classifier = torch.nn.Linear(in_features, num_classes)
+                super(SEEfficientNet, self).__init__()
+                # Load base model
+                self.base_model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT)
+                
+                # Get feature layer
+                self.features = self.base_model.features
+                
+                # Add SE blocks
+                for i in range(len(self.features)):
+                    if hasattr(self.features[i], 'block'):
+                        channels = self.features[i]._blocks[-1].project_conv.out_channels
+                        se_block = SEBlock(channels)
+                        setattr(self, f'se_block_{i}', se_block)
+                
+                # Classification layer
+                self.classifier = torch.nn.Sequential(
+                    torch.nn.Dropout(p=0.3),
+                    torch.nn.Linear(in_features=1280, out_features=512),
+                    torch.nn.BatchNorm1d(512),
+                    torch.nn.ReLU(),
+                    torch.nn.Dropout(p=0.4),
+                    torch.nn.Linear(in_features=512, out_features=128),
+                    torch.nn.BatchNorm1d(128),
+                    torch.nn.ReLU(),
+                    torch.nn.Dropout(p=0.3),
+                    torch.nn.Linear(in_features=128, out_features=num_classes)
+                )
+            
+            def forward(self, x):
+                for i in range(len(self.features)):
+                    x = self.features[i](x)
+                    if hasattr(self, f'se_block_{i}'):
+                        se_block = getattr(self, f'se_block_{i}')
+                        x = se_block(x)
+                
+                x = torch.nn.functional.adaptive_avg_pool2d(x, (1, 1))
+                x = torch.flatten(x, 1)
+                
+                return self.classifier(x)
+
+        # Function to create the ViT model
+        def create_vit_classifier(num_classes=2, dropout_rate=0.2):
+            try:
+                import timm
+                model = timm.create_model('vit_large_patch16_224', pretrained=True, drop_rate=dropout_rate)
+                in_features = model.head.in_features
+                model.head = torch.nn.Sequential(
+                    torch.nn.Dropout(dropout_rate),
+                    torch.nn.Linear(in_features, num_classes)
+                )
+                return model
+            except ImportError:
+                st.error("Could not load the ViT model. The timm library is not installed.")
+                return None
+
+        # Define the ensemble model
+        class EnsembleModel(torch.nn.Module):
+            def __init__(self, vit_model, efficientnet_model, vit_weight=0.6, efficientnet_weight=0.4):
+                super(EnsembleModel, self).__init__()
+                self.vit_model = vit_model
+                self.efficientnet_model = efficientnet_model
+                self.vit_weight = vit_weight
+                self.efficientnet_weight = efficientnet_weight
                 
             def forward(self, x):
-                features = self.backbone(x)
-                return self.classifier(features)
-        
-        # Create our custom model
-        model = CustomResNet(num_classes=1)
-        
-        # Try to load the model
-        try:
-            # Option 1: Try to load directly (might work if it's just the state dict)
-            state_dict = torch.load(model_path, map_location=torch.device('cpu'))
-            
-            # Check if it's a complete model or just state_dict
-            if isinstance(state_dict, dict) and 'state_dict' in state_dict:
-                # It's a complete model save
-                state_dict = state_dict['state_dict']
-            
-            # Process the state dict to match our model
-            # We need to map the original fc.weight to our custom classifier.weight
-            new_state_dict = {}
-            for key, value in state_dict.items():
-                if key.startswith('fc.'):
-                    # Map fc.weight -> classifier.weight and fc.bias -> classifier.bias
-                    new_key = key.replace('fc.', 'classifier.')
-                    new_state_dict[new_key] = value
+                vit_output = self.vit_model(x)
+                efficientnet_output = self.efficientnet_model(x)
+                
+                # Adjust dimensions
+                if vit_output.shape[1] > 1 and efficientnet_output.shape[1] == 1:
+                    eff_sigmoid = torch.sigmoid(efficientnet_output).view(-1, 1)
+                    efficientnet_probs = torch.cat([1 - eff_sigmoid, eff_sigmoid], dim=1)
+                    vit_probs = torch.nn.functional.softmax(vit_output, dim=1)
+                elif vit_output.shape[1] == 1 and efficientnet_output.shape[1] == 1:
+                    vit_probs = torch.sigmoid(vit_output)
+                    efficientnet_probs = torch.sigmoid(efficientnet_output)
                 else:
-                    # Add backbone. prefix to other keys
-                    new_key = 'backbone.' + key
-                    new_state_dict[new_key] = value
+                    vit_probs = torch.nn.functional.softmax(vit_output, dim=1)
+                    efficientnet_probs = torch.nn.functional.softmax(efficientnet_output, dim=1)
+                
+                # Combine with weights
+                ensemble_output = (self.vit_weight * vit_probs + 
+                                  self.efficientnet_weight * efficientnet_probs)
+                
+                return ensemble_output
+        
+        try:
+            # Load individual models
+            vit_model = create_vit_classifier(num_classes=2)
+            vit_checkpoint = torch.load(vit_model_path, map_location=torch.device('cpu'))
+            if 'model_state_dict' in vit_checkpoint:
+                vit_model.load_state_dict(vit_checkpoint['model_state_dict'])
+            else:
+                vit_model.load_state_dict(vit_checkpoint)
+            vit_model.eval()
             
-            # Load the processed state dict
-            model.load_state_dict(new_state_dict, strict=False)
+            efficientnet_model = SEEfficientNet(num_classes=1)
+            eff_checkpoint = torch.load(efficient_model_path, map_location=torch.device('cpu'))
+            if 'model_state_dict' in eff_checkpoint:
+                efficientnet_model.load_state_dict(eff_checkpoint['model_state_dict'])
+            else:
+                efficientnet_model.load_state_dict(eff_checkpoint)
+            efficientnet_model.eval()
+            
+            # Load the optimized ensemble model
+            ensemble_checkpoint = torch.load(model_path, map_location=torch.device('cpu'))
+            
+            # Get optimized weights
+            best_weights = ensemble_checkpoint['best_weights']
+            vit_weight, efficientnet_weight = best_weights
+            
+            # Create the ensemble model
+            ensemble_model = EnsembleModel(
+                vit_model, 
+                efficientnet_model, 
+                vit_weight=vit_weight, 
+                efficientnet_weight=efficientnet_weight
+            )
+            
+            # Load ensemble state if it exists
+            if 'model_state_dict' in ensemble_checkpoint:
+                ensemble_model.load_state_dict(ensemble_checkpoint['model_state_dict'])
+            
+            # Set to evaluation mode
+            ensemble_model.eval()
+            
+            # Log success information
+            st.success(f"Successfully loaded optimized ensemble model with metaheuristic weights: ViT={vit_weight:.4f}, EfficientNet={efficientnet_weight:.4f}")
+            
+            return ensemble_model
             
         except Exception as e:
-            st.error(f"Error loading model weights: {str(e)}")
+            st.error(f"Error loading ensemble model: {str(e)}")
             st.error(traceback.format_exc())
             
-            # Fallback: Create a completely new model for demonstration
-            model = CustomResNet(num_classes=1)
-            st.warning("Using a simulated model for demonstration purposes")
-        
-        # Set to evaluation mode
-        model.eval()
-        
-        return model
+            # Fallback: Create a dummy model for demonstration
+            class DummyEnsemble(torch.nn.Module):
+                def __init__(self):
+                    super(DummyEnsemble, self).__init__()
+                
+                def forward(self, x):
+                    # Return a binary classification output (two probabilities)
+                    return torch.tensor([[0.5, 0.5]])
+            
+            dummy_model = DummyEnsemble()
+            st.warning("Using a simulated ensemble model for demonstration purposes")
+            return dummy_model
+            
     except Exception as e:
         st.error(f"Error loading vision model: {str(e)}")
         st.error(traceback.format_exc())
@@ -648,10 +769,10 @@ def load_vision_model():
             
             def forward(self, x):
                 # Always return a middle probability (0.5)
-                return torch.tensor([[0.5]])
+                return torch.tensor([[0.5, 0.5]])
         
         dummy_model = DummyModel()
-        st.warning("Using a dummy model that returns fixed predictions for demonstration")
+        st.warning("Using a dummy model that returns fixed predictions for demonstration purposes")
         return dummy_model
 
 # Function to load LLM model for melanoma information chatbot
@@ -753,83 +874,108 @@ def classify_text_response(response, model, tokenizer, id_to_label):
         return "error", 0.0, {}
 
 # Function to preprocess and classify image
+# Función para preprocesar y clasificar imágenes con enfoque de dos etapas
 def classify_image(image, model, id_to_label):
     try:
-        # Define image transformations (adjust according to your model's requirements)
+        # Define transformaciones de imagen
         transform = transforms.Compose([
             transforms.Resize((224, 224)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         ])
+
+        # Preprocesar la imagen
+        img_tensor = transform(image).unsqueeze(0)  # Añadir dimensión de lote
         
-        # Preprocess the image
-        img_tensor = transform(image).unsqueeze(0)  # Add batch dimension
-        
-        # Make prediction
+        # Realizar predicción
         with torch.no_grad():
             outputs = model(img_tensor)
-            # For binary model (sigmoid activation)
-            if outputs.shape[1] == 1:
-                # Apply sigmoid to get probability
-                prob = torch.sigmoid(outputs)[0][0].item()
+            
+            # PRIMERA ETAPA: Clasificación binaria (benigno vs maligno)
+            binary_result = ""
+            binary_confidence = 0.0
+            
+            if outputs.shape[1] == 2:  # Modelo con salida softmax [benigno_prob, maligno_prob]
+                binary_probs = outputs[0]
+                maligno_prob = binary_probs[0].item()
+                benigno_prob = binary_probs[1].item()
                 
-                # Map the probability to our classes based on threshold
-                # Lower thresholds for higher sensitivity to concerning lesions
-                if prob < 0.25:
-                    pred_class = 0  # not_concerning
-                    class_probs = {
-                        id_to_label[0]: 1 - prob,  # not_concerning
-                        id_to_label[1]: 0.0,       # mildly_concerning
-                        id_to_label[2]: 0.0,       # moderately_concerning
-                        id_to_label[3]: prob       # highly_concerning (treat as binary output)
-                    }
-                elif prob < 0.5:
-                    pred_class = 1  # mildly_concerning
-                    class_probs = {
-                        id_to_label[0]: 0.7 - prob,       # not_concerning
-                        id_to_label[1]: prob * 1.2,       # mildly_concerning
-                        id_to_label[2]: 0.0,              # moderately_concerning
-                        id_to_label[3]: 0.0               # highly_concerning
-                    }
-                elif prob < 0.75:
-                    pred_class = 2  # moderately_concerning
-                    class_probs = {
-                        id_to_label[0]: 0.0,              # not_concerning
-                        id_to_label[1]: 1.0 - prob,       # mildly_concerning
-                        id_to_label[2]: prob,             # moderately_concerning
-                        id_to_label[3]: 0.0               # highly_concerning
-                    }
+                # Determinar resultado binario
+                if maligno_prob > 0.5:
+                    binary_result = "Maligno"
+                    binary_confidence = maligno_prob
                 else:
-                    pred_class = 3  # highly_concerning
+                    binary_result = "Benigno"
+                    binary_confidence = benigno_prob
+                
+            elif outputs.shape[1] == 1:  # Modelo con salida sigmoid
+                maligno_prob = torch.sigmoid(outputs)[0][0].item()
+                benigno_prob = 1.0 - maligno_prob
+                
+                # Determinar resultado binario
+                if maligno_prob > 0.5:
+                    binary_result = "Maligno"
+                    binary_confidence = maligno_prob
+                else:
+                    binary_result = "Benigno"
+                    binary_confidence = benigno_prob
+            
+            # SEGUNDA ETAPA: Asignar a una de las 4 categorías según la confianza
+            # Crear un mapeo para convertir el resultado binario y confianza a una categoría de preocupación
+            
+            # Inicializar variables
+            pred_class = 0  # por defecto: no preocupante
+            class_probs = {}
+            
+            # Asignar categoría según el resultado binario y nivel de confianza
+            if binary_result == "Benigno":
+                if binary_confidence > 0.9:  # Muy alta confianza de que es benigno
+                    pred_class = 0  # no preocupante
                     class_probs = {
-                        id_to_label[0]: 0.0,              # not_concerning
-                        id_to_label[1]: 0.0,              # mildly_concerning
-                        id_to_label[2]: 1.0 - prob,       # moderately_concerning
-                        id_to_label[3]: prob              # highly_concerning
+                        id_to_label[0]: binary_confidence,
+                        id_to_label[1]: 1.0 - binary_confidence,
+                        id_to_label[2]: 0.0,
+                        id_to_label[3]: 0.0
                     }
-                
-                # Get label name
-                label_name = id_to_label[pred_class]
-                score = class_probs[label_name]
-            else:
-                # For multi-class model (softmax activation)
-                probs = torch.softmax(outputs, dim=1)
-                pred_class = torch.argmax(probs, dim=1).item()
-                score = probs[0, pred_class].item()
-                
-                # Get label name
-                label_name = id_to_label[pred_class]
-                
-                # Get all probabilities
-                all_probs = probs[0].tolist()
-                class_probs = {id_to_label[i]: prob for i, prob in enumerate(all_probs)}
-        
+                else:  # Confianza moderada de que es benigno
+                    pred_class = 1  # levemente preocupante
+                    class_probs = {
+                        id_to_label[0]: 0.0,
+                        id_to_label[1]: binary_confidence,
+                        id_to_label[2]: 1.0 - binary_confidence,
+                        id_to_label[3]: 0.0
+                    }
+            else:  # Maligno
+                if binary_confidence > 0.8:  # Alta confianza de que es maligno
+                    pred_class = 3  # altamente preocupante
+                    class_probs = {
+                        id_to_label[0]: 0.0,
+                        id_to_label[1]: 0.0,
+                        id_to_label[2]: 1.0 - binary_confidence,
+                        id_to_label[3]: binary_confidence
+                    }
+                else:  # Confianza moderada de que es maligno
+                    pred_class = 2  # moderadamente preocupante
+                    class_probs = {
+                        id_to_label[0]: 0.0,
+                        id_to_label[1]: 0.0,
+                        id_to_label[2]: binary_confidence,
+                        id_to_label[3]: 1.0 - binary_confidence
+                    }
+            
+            # Obtener nombre de etiqueta
+            label_name = id_to_label[pred_class]
+            score = class_probs[label_name]
+            
+            # Añadir el resultado binario al diccionario de resultados
+            class_probs["binary_result"] = binary_result
+            class_probs["binary_confidence"] = binary_confidence
+
         return label_name, score, class_probs
     except Exception as e:
-        st.error(f"Image classification error: {str(e)}")
+        st.error(f"Error de clasificación de imagen: {str(e)}")
         st.error(traceback.format_exc())
-        return "error", 0.0, {}
-
+        return "error", 0.0, {"error": str(e)}
 # Logic-based fusion of text and image predictions
 def combine_predictions(text_probs, image_probs, unique_labels, user_responses=None):
     try:
@@ -878,23 +1024,28 @@ def combine_predictions(text_probs, image_probs, unique_labels, user_responses=N
         
         # Rule 5: Strong agreement between models increases confidence
         if text_probs and image_probs:
+            # Create a copy of image_probs without non-label keys for comparison
+            filtered_image_probs = {k: v for k, v in image_probs.items() if k in unique_labels}
+            
             # Find highest probability class for each model
-            text_max_class = max(text_probs, key=text_probs.get)
-            image_max_class = max(image_probs, key=image_probs.get)
+            text_max_class = max(text_probs, key=text_probs.get) if text_probs else "error"
+            image_max_class = max(filtered_image_probs, key=filtered_image_probs.get) if filtered_image_probs else "error"
             
             # If both models agree, boost that class
             if text_max_class == image_max_class and text_max_class != "error":
                 st.success(f"Both models agree on the classification: {text_max_class.replace('_', ' ').title()}")
                 
                 # Get average confidence
-                avg_confidence = (text_probs[text_max_class] + image_probs[text_max_class]) / 2
+                avg_confidence = (text_probs[text_max_class] + filtered_image_probs[text_max_class]) / 2
                 
                 # Apply confidence boost
                 for label in unique_labels:
                     if label == text_max_class:
                         # Boost the agreed class by 20%
-                        text_probs[label] = min(1.0, text_probs[label] * 1.2)
-                        image_probs[label] = min(1.0, image_probs[label] * 1.2)
+                        if label in text_probs:
+                            text_probs[label] = min(1.0, text_probs[label] * 1.2)
+                        if label in filtered_image_probs:
+                            filtered_image_probs[label] = min(1.0, filtered_image_probs[label] * 1.2)
         
         # Normalize weights to sum to 1
         total_weight = text_weight + image_weight
@@ -904,24 +1055,36 @@ def combine_predictions(text_probs, image_probs, unique_labels, user_responses=N
         # Combine probabilities for each class
         for label in unique_labels:
             text_prob = text_probs.get(label, 0.0)
-            image_prob = image_probs.get(label, 0.0)
+            # Use the filtered image probs to avoid non-label keys
+            image_prob = filtered_image_probs.get(label, 0.0) if 'filtered_image_probs' in locals() else image_probs.get(label, 0.0)
             combined_probs[label] = (text_prob * text_weight) + (image_prob * image_weight)
         
         # Log the weights used
         st.write(f"Diagnostic weighting: Patient responses ({text_weight:.2f}), Image analysis ({image_weight:.2f})")
         
         # Get the highest probability class
-        max_label = max(combined_probs, key=combined_probs.get)
-        max_score = combined_probs[max_label]
+        max_label = max(combined_probs, key=combined_probs.get) if combined_probs else "error"
+        max_score = combined_probs.get(max_label, 0.0)
         
+        # Add the binary classification result to the combined probs if available
+        if "binary_result" in image_probs:
+            combined_probs["binary_result"] = image_probs["binary_result"]
+        if "binary_confidence" in image_probs:
+            combined_probs["binary_confidence"] = image_probs["binary_confidence"]
+            
         return max_label, max_score, combined_probs
     except Exception as e:
         st.error(f"Error combining predictions: {str(e)}")
         st.error(traceback.format_exc())
         # Return the image prediction as fallback
-        max_label = max(image_probs, key=image_probs.get) if image_probs else "error"
-        max_score = image_probs.get(max_label, 0.0)
-        return max_label, max_score, image_probs
+        if image_probs:
+            # Filter out non-label keys
+            filtered_image_probs = {k: v for k, v in image_probs.items() if k in unique_labels}
+            if filtered_image_probs:
+                max_label = max(filtered_image_probs, key=filtered_image_probs.get)
+                max_score = filtered_image_probs.get(max_label, 0.0)
+                return max_label, max_score, image_probs
+        return "error", 0.0, {"error": str(e)}
 
 # Function to visualize classification results and risk levels
 def visualize_results(text_label, text_score, image_label, image_score, combined_label, combined_score):
@@ -1689,14 +1852,12 @@ def main():
         if st.session_state.has_processed:
             st.sidebar.header("📊 Statistics")
             st.sidebar.info(f"Total documents: {len(st.session_state.melanoma_rag.doc_metadata)}")
-            st.sidebar.info(f"Total chunks: {len(st.session_state.melanoma_rag.chunks)}")
             
             # List of documents
             st.sidebar.header("📑 Processed Documents")
             for doc_name, metadata in st.session_state.melanoma_rag.doc_metadata.items():
                 st.sidebar.markdown(f"**{doc_name}**")
-                st.sidebar.markdown(f"- Chunks: {metadata['total_chunks']}")
-                st.sidebar.markdown(f"- Size: {metadata['size']/1024:.2f} KB")
+
         
         # Main area
         if st.session_state.has_processed:
