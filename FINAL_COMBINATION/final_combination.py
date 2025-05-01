@@ -1159,10 +1159,6 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     
     # Show plot
     st.pyplot(fig)
-    
-    
-
-    
 
 # Define the list of questions grouped by categories
 questions_by_category = {
@@ -1195,6 +1191,200 @@ questions_by_category = {
 all_questions = []
 for category, questions in questions_by_category.items():
     all_questions.extend(questions)
+# Function to implement Grad-CAM visualization without external packages
+def apply_custom_gradcam(image, model, id_to_label):
+    """
+    Apply a custom implementation of Grad-CAM visualization to an image.
+    
+    Args:
+        image: PIL Image to visualize
+        model: PyTorch model for classification
+        id_to_label: Dictionary mapping label IDs to label names
+        
+    Returns:
+        visualization: PIL Image with Grad-CAM heatmap overlay
+        original_image: PIL Image resized to match model input
+        pred_label: Predicted label
+        binary_result: Binary classification result (Malignant/Benign)
+        binary_confidence: Confidence in binary classification
+    """
+    try:
+        import torch
+        import numpy as np
+        import torch.nn.functional as F
+        import torchvision.transforms as transforms
+        from PIL import Image
+        import matplotlib.pyplot as plt
+        import cv2
+        
+        # Define image transformation
+        transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        ])
+        
+        # Preprocess the image for visualization (without normalization)
+        vis_transform = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+        ])
+        
+        # Create a class to capture activations and gradients
+        class GradCamHook:
+            def __init__(self, module):
+                self.activations = None
+                self.gradients = None
+                self.forward_hook = module.register_forward_hook(self.hook_forward)
+                self.backward_hook = module.register_full_backward_hook(self.hook_backward)
+                
+            def hook_forward(self, module, input, output):
+                self.activations = output.detach()
+                
+            def hook_backward(self, module, grad_input, grad_output):
+                self.gradients = grad_output[0].detach()
+                
+            def remove(self):
+                self.forward_hook.remove()
+                self.backward_hook.remove()
+        
+        # Helper function to find the most suitable layer for Grad-CAM
+        def find_target_layer(model):
+            # For ensemble model with EfficientNet
+            if hasattr(model, 'efficientnet_model') and hasattr(model.efficientnet_model, 'features'):
+                return model.efficientnet_model.features[-1]
+            # For ensemble model with ViT
+            elif hasattr(model, 'vit_model') and hasattr(model.vit_model, 'blocks'):
+                return model.vit_model.blocks[-1]
+            # Generic case: find the last convolutional layer
+            else:
+                target_layer = None
+                for name, module in reversed(list(model.named_modules())):
+                    if isinstance(module, torch.nn.Conv2d):
+                        target_layer = module
+                        break
+                return target_layer
+        
+        # Get the target layer
+        target_layer = find_target_layer(model)
+        if target_layer is None:
+            st.error("Could not find a suitable target layer for Grad-CAM")
+            return None, image, "error", "Unknown", 0.0
+        
+        # Register hooks
+        grad_cam_hook = GradCamHook(target_layer)
+        
+        # Make a copy of the model that requires gradients
+        model.eval()
+        model.zero_grad()
+        
+        # Preprocess the image
+        img_tensor = transform(image).unsqueeze(0)
+        img_tensor.requires_grad = True
+        
+        # Get the unnormalized image for visualization
+        vis_img_tensor = vis_transform(image)
+        vis_img_array = vis_img_tensor.numpy().transpose(1, 2, 0)
+        
+        # Forward pass
+        if hasattr(model, 'vit_model') and hasattr(model, 'efficientnet_model'):
+            # Handle ensemble model
+            outputs = model(img_tensor)
+            # Extract binary classification results
+            if outputs.shape[1] == 2:  # Softmax outputs [benign_prob, malignant_prob]
+                binary_probs = outputs[0]
+                malignant_prob = binary_probs[1].item()
+                benign_prob = binary_probs[0].item()
+                
+                # Determine binary result
+                if malignant_prob > 0.5:
+                    binary_result = "Malignant"
+                    binary_confidence = malignant_prob
+                    # CORRECCIÓN: En lugar de asignar directamente la clase 3 o 2,
+                    # verificamos cuántas clases tiene el modelo y mapeamos según corresponda
+                    pred_class = 1  # En el caso binario, usamos la clase 1 (maligno)
+                else:
+                    binary_result = "Benign"
+                    binary_confidence = benign_prob
+                    # CORRECCIÓN: Similar a lo anterior
+                    pred_class = 0  # En el caso binario, usamos la clase 0 (benigno)
+            else:
+                # Para otros formatos de salida, usamos argmax
+                pred_class = torch.argmax(outputs, dim=1).item()
+                binary_result = "Unknown"
+                binary_confidence = 0.0
+        else:
+            # Modelo genérico
+            outputs = model(img_tensor)
+            pred_class = torch.argmax(outputs, dim=1).item()
+            binary_result = "Unknown"
+            binary_confidence = 0.0
+        
+        # Get class name
+        mapped_class = min(pred_class, len(id_to_label) - 1)  # Ensure we don't go out of bounds
+        pred_label = id_to_label[mapped_class]
+        
+        # Backward pass to get gradients
+        if outputs.shape[1] > 1:  # Multi-class case
+            model.zero_grad()
+            # CORRECCIÓN: Asegurarse de que pred_class no esté fuera de los límites
+            target_class = min(pred_class, outputs.shape[1] - 1)
+            outputs[0, target_class].backward()
+        else:  # Binary case
+            model.zero_grad()
+            outputs.backward()
+        
+        # Get activations and gradients
+        activations = grad_cam_hook.activations
+        gradients = grad_cam_hook.gradients
+        
+        # Remove hooks
+        grad_cam_hook.remove()
+        
+        # Compute Grad-CAM
+        if activations is not None and gradients is not None:
+            # Global average pooling of gradients
+            weights = torch.mean(gradients, dim=(2, 3), keepdim=True)
+            
+            # Weight the activations by the gradients
+            cam = torch.sum(activations * weights, dim=1, keepdim=True)
+            
+            # Apply ReLU to focus on features that have a positive influence
+            cam = F.relu(cam)
+            
+            # Normalize the CAM
+            cam = F.interpolate(cam, size=(224, 224), mode='bilinear', align_corners=False)
+            cam = cam - cam.min()
+            cam = cam / (cam.max() + 1e-8)
+            
+            # Convert to numpy array
+            cam = cam[0, 0].detach().cpu().numpy()
+            
+            # Apply colormap to the heatmap
+            heatmap = cv2.applyColorMap(np.uint8(255 * cam), cv2.COLORMAP_JET)
+            heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+            
+            # Resize heatmap to match the original image
+            heatmap = cv2.resize(heatmap, (224, 224))
+            
+            # Overlay heatmap on original image
+            alpha = 0.4  # Transparency factor
+            visualization = heatmap * alpha + vis_img_array * 255 * (1 - alpha)
+            visualization = np.clip(visualization, 0, 255).astype(np.uint8)
+            
+            # Convert back to PIL Image
+            visualization = Image.fromarray(visualization)
+            original_image = Image.fromarray((vis_img_array * 255).astype(np.uint8))
+            
+            return visualization, original_image, pred_label, binary_result, binary_confidence
+        else:
+            st.warning("Could not capture activations or gradients for Grad-CAM")
+            return None, image, pred_label, binary_result, binary_confidence
+            
+    except Exception as e:
+        st.error(f"Error generating Grad-CAM visualization: {str(e)}")
+        st.error(traceback.format_exc())
+        return None, image, "error", "Unknown", 0.0
 
 # Main function
 def main():
@@ -1490,20 +1680,41 @@ def main():
             if uploaded_file is not None:
                 st.session_state.uploaded_image = uploaded_file
                 image = Image.open(uploaded_file).convert('RGB')
-                st.image(image, caption="Uploaded Image", width=300)
+                
+                # Create columns for original image and Grad-CAM visualization
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.write("**Original Image**")
+                    st.image(image, caption="Uploaded Image", width=300)
+                
+                # Generate Grad-CAM visualization if model is loaded
+                if vision_model_loaded:
+                    with col2:
+                        st.write("**Feature Importance Visualization**")
+                        with st.spinner("Generating heatmap visualization..."):
+                            # Get custom Grad-CAM visualization
+                            vis_image, _, pred_label, binary_result, binary_confidence = apply_custom_gradcam(
+                                image, vision_model, id_to_label
+                            )
+                            
+                            if vis_image:
+                                st.image(vis_image, caption=f"Grad-CAM Visualization", width=300)
+                                st.write(f"Initial Classification: **{binary_result}** (Confidence: {binary_confidence:.2f})")
+                                st.info("Red/yellow areas highlight regions most influential for the model's prediction")
+                            else:
+                                st.warning("Could not generate visualization. Proceeding with regular analysis.")
                 
                 # Buttons for navigation
                 col1, col2, col3 = st.columns([1, 1, 2])
                 with col1:
                     if st.button("← Back to Questionnaire"):
                         st.session_state.step = 1
-                        
                 
                 with col2:
                     if st.button("Perform Analysis", type="primary"):
                         # Process the image and questionnaire
                         st.session_state.step = 3
-                        
             else:
                 # Only show back button if no image
                 if st.button("← Back to Questionnaire"):
@@ -1537,9 +1748,21 @@ def main():
                 if st.session_state.image_result is None and vision_model_loaded and st.session_state.uploaded_image:
                     # Load image
                     image = Image.open(st.session_state.uploaded_image).convert('RGB')
+                    vis_image, original_image, pred_label, binary_result, binary_confidence = apply_custom_gradcam(
+                                image, vision_model, id_to_label
+                            )
                     
-                    # Display the image
-                    st.image(image, caption="Analyzed Image", width=300)
+                    # Resize both images to the same size for consistent display
+                    resized_image = original_image.resize((300, 300))
+                    resized_vis_image = vis_image.resize((300, 300))
+                    
+                    # Display the images
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.image(resized_image, caption="Analyzed Image", width=300)
+                    with col2:
+                        st.image(resized_vis_image, caption="Grad-CAM Visualization", width=300)
+
                     
                     # Classify image
                     image_label, image_score, image_probs = classify_image(
