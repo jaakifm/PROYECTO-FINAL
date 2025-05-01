@@ -305,7 +305,7 @@ def plot_confusion_matrix(cm, class_names):
     plt.tight_layout()
     
     # Guardar la matriz de confusión
-    plt.savefig('confusion_matrix_ensemble_final_kaggle.png')
+    plt.savefig('confusion_matrix_ensemble_final.png')
     plt.show()
 
 # Definimos el conjunto de transformaciones para evaluación
