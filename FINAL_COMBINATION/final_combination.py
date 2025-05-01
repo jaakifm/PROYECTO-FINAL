@@ -1102,48 +1102,53 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     image_label = str(image_label) if image_label is not None else "error"
     combined_label = str(combined_label) if combined_label is not None else "error"
     
-    # Create data for visualization
-    models = ['Questionnaire Results', 'Image Analysis', 'Combined Diagnosis']
-    scores = [text_score, image_score, combined_score]
-    labels = [text_label, image_label, combined_label]
-    colors = [color_map.get(label, '#9E9E9E') for label in labels]
+    # Create data for visualization - ensure strict order
+    data = {
+        'Model': ['Questionnaire Results', 'Image Analysis', 'Combined Diagnosis'],
+        'Confidence': [text_score, image_score, combined_score],
+        'Classification': [text_label, image_label, combined_label]
+    }
     
-    # Create dataframe
-    chart_data = pd.DataFrame({
-        'Model': models,
-        'Confidence': scores,
-        'Classification': labels
-    })
+    # Create colors list in the same order
+    colors = [color_map.get(text_label, '#9E9E9E'), 
+              color_map.get(image_label, '#9E9E9E'), 
+              color_map.get(combined_label, '#9E9E9E')]
+    
+    # Create dataframe with consistent order
+    chart_data = pd.DataFrame(data)
     
     # Create a bar chart for confidence levels
     fig, ax = plt.subplots(figsize=(10, 6))
     
-    # Create barplot
-    bars = sns.barplot(x='Model', y='Confidence', data=chart_data, ax=ax, palette=colors, hue='Classification')
+    # Create barplot with explicit index ordering
+    bars = ax.bar(range(len(data['Model'])), data['Confidence'], color=colors)
     
-    # Add classification labels - with safety checks
-    for i, bar in enumerate(bars.patches):
-        if i < len(labels):  # Ensure we don't go out of bounds
-            try:
-                label_text = labels[i].replace('_', ' ').title()
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + 0.02,
-                    label_text,
-                    ha='center',
-                    va='bottom',
-                    fontsize=12
-                )
-            except (AttributeError, IndexError):
-                # If there's any issue with label formatting, use a safe default
-                ax.text(
-                    bar.get_x() + bar.get_width() / 2,
-                    bar.get_height() + 0.02,
-                    "Unknown",
-                    ha='center',
-                    va='bottom',
-                    fontsize=12
-                )
+    # Set x-axis ticks and labels
+    ax.set_xticks(range(len(data['Model'])))
+    ax.set_xticklabels(data['Model'])
+    
+    # Add classification labels directly mapped to each bar
+    label_texts = [l.replace('_', ' ').title() for l in data['Classification']]
+    
+    for i, (bar, label_text) in enumerate(zip(bars, label_texts)):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 0.02,
+            label_text,
+            ha='center',
+            va='bottom',
+            fontsize=12
+        )
+    
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=color_map['not_concerning'], label='Not Concerning'),
+        Patch(facecolor=color_map['mildly_concerning'], label='Mildly Concerning'),
+        Patch(facecolor=color_map['moderately_concerning'], label='Moderately Concerning'),
+        Patch(facecolor=color_map['highly_concerning'], label='Highly Concerning')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
     
     ax.set_title('Confidence by Diagnostic Method', fontsize=14)
     ax.set_ylim(0, 1.1)
@@ -1154,6 +1159,7 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     
     # Show plot
     st.pyplot(fig)
+    
     
 
     
