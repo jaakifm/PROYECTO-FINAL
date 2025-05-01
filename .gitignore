@@ -1,5 +1,4 @@
-#pesos modelos
-
+#imagenes
 images
 
 #dataset_papers
@@ -19,7 +18,7 @@ NLP/CHATBOT/flagged
 /llama3.1
 
 
-#images
+
 NLP/CHATBOT/rules_based.png
 NLP/CHATBOT/results_naive_bayes.png
 NLP/CHATBOT/chatbot_naive_bayes.png
@@ -28,3 +27,20 @@ COMPUTER_VISION/*.h5
 NLP/CHATBOT/*.png
 NLP/CHATBOT/*.jpg
 NLP/CHATBOT/*.json
+FINAL_COMBINATION/finetuned_model
+FINAL_COMBINATION/imagenes_prueba_cuestionario
+FINAL_COMBINATION/imagenes_pruebas_whisper
+FINAL_COMBINATION/imagenes_Rag
+FINAL_COMBINATION/*.pth
+FINAL_COMBINATION/*.gguf
+FINAL_COMBINATION/*.json
+COMPUTER_VISION/vision_transformers/*.pth
+COMPUTER_VISION/vision_transformers/*.png
+COMPUTER_VISION/vision_transformers/*.csv
+COMPUTER_VISION/Ensamblado_mejores_modelos/*.png
+NLP/CHATBOT/finetuned_model
+NLP/CHATBOT/imagenes_comparacion_cuestionario
+NLP/CHATBOT/results
+NLP/CHATBOT/TRANSCRIPTION_ANSWERS/*.mp4
+NLP/CHATBOT/TRANSCRIPTION_ANSWERS/__pycache__
+/*.json
