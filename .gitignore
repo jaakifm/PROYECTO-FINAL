@@ -38,6 +38,7 @@ COMPUTER_VISION/vision_transformers/*.pth
 COMPUTER_VISION/vision_transformers/*.png
 COMPUTER_VISION/vision_transformers/*.csv
 COMPUTER_VISION/Ensamblado_mejores_modelos/*.png
+COMPUTER_VISION/Ensamblado_mejores_modelos/*.pth
 NLP/CHATBOT/finetuned_model
 NLP/CHATBOT/imagenes_comparacion_cuestionario
 NLP/CHATBOT/results
