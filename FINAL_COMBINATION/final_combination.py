@@ -1155,25 +1155,7 @@ def visualize_results(text_label, text_score, image_label, image_score, combined
     # Show plot
     st.pyplot(fig)
     
-    # Create a severity gauge chart
-    fig2, ax = plt.subplots(figsize=(10, 4))
-    
-    # Define the gauge scale based on severity categories
-    severity_scale = ['Not Concerning', 'Mildly\nConcerning', 'Moderately\nConcerning', 'Highly\nConcerning']
-    severity_positions = [0, 0.33, 0.66, 1]
-    severity_colors = ['#4CAF50', '#FFEB3B', '#FF9800', '#F44336']
-    
-    # Determine position based on combined label
-    if combined_label == 'not_concerning':
-        position = 0.16  # Middle of "not concerning" range
-    elif combined_label == 'mildly_concerning':
-        position = 0.49  # Middle of "mildly concerning" range
-    elif combined_label == 'moderately_concerning':
-        position = 0.82  # Middle of "moderately concerning" range
-    elif combined_label == 'highly_concerning':
-        position = 0.95  # High end of "highly concerning" range
-    else:
-        position = 0.5  # Middle for error
+
     
 
 # Define the list of questions grouped by categories
