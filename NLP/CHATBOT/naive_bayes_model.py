@@ -67,7 +67,7 @@ def get_severity_training_set():
         ("it might be a little asymmetrical", "mildly_concerning"),
         
         # Not Concerning responses
-        ("no"," not_concerning"),
+        ("no","not_concerning"),
         ("nothing", "not_concerning"),
         ("it hasn't grown at all", "not_concerning"),
         ("it's still the same size", "not_concerning"),
