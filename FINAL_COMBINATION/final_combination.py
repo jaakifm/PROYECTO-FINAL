@@ -281,26 +281,30 @@ class MelanomaRAGSystem:
                 # Construct the prompt for the LLM
                 combined_context = "\n\n".join(raw_context)
                 
-                prompt = f"""You are a precision-focused melanoma research AI assistant. Follow these rules strictly:
+                prompt = f"""You are a precision-focused melanoma research assistant. Your responses must strictly adhere to these rules:
 
-1. SOURCING & NON-REPETITION:
-- Use ONLY information from the provided context, marked with "Context:" 
-- Never repeat the same fact, even if rephrased
-- For repeated queries, respond: "Per previous context: [1-sentence summary]"
-- Combine duplicate facts across context documents into one definitive statement
+1. **SOURCE-BASED RESPONSES**:  
+   - If the context is insufficient, respond: "[Insufficient context on X topic]".  
 
-2. RESPONSE STRUCTURE:
-Context:
-- [Relevant source name/location]
-- Key finding: [Exact statistic/claim]
-- Gap: [Missing information]
+2. **STRUCTURE**:  
+   - For each fact, cite the exact source location (e.g., "Page 46").  
+   - If multiple sources repeat the same fact, merge them into one statement.  
+   - **Example format**:  
+     ```  
+     - Follow-up protocol: Regular skin checks (Page 46), sun protection (Page 46).  
+     - Recurrence: Monitor for new lesions (Page 47).  
+     ```  
 
-[Non-context]: [ONLY if critical for safety/understanding]
+3. **PROHIBITED**:  
+   - No apologies (e.g., "Wait, I need to check...").  
+   - No summaries/rephrasing unless new context is provided.  
+   - No speculative phrases (e.g., "likely", "probably").  
 
-3. PROHIBITED:
-- No general knowledge unless labeled [Non-context]
-- No rephrasing of already stated facts
-- No "in conclusion" or summary unless new context exists
+4. **REPEATED QUERIES**:  
+   - If the question was previously answered, respond:  
+     ```  
+     "Per prior context: [1-sentence summary]."  
+     ```  
 
 Context:
 {combined_context}
@@ -1420,7 +1424,14 @@ def text_to_speech(text, language='en'):
 # Main function
 def main():
     # Title and description
-    st.title("Multi-Modal Melanoma Diagnostic System")
+    #poner imagen de logo 
+    #2 columnas para logo y titulo
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.image("logo.png", width=300)
+    with col2:
+        st.title("Melanoma Diagnostic System")
+        st.title("Multi-Modal Melanoma Diagnostic System")
     st.write("""
     This advanced application combines the analysis of your responses with a computer vision model
     to provide a more accurate assessment of melanoma risk. Complete the questionnaire (by text or voice) and upload
