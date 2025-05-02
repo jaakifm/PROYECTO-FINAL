@@ -1192,7 +1192,226 @@ questions_by_category = {
 all_questions = []
 for category, questions in questions_by_category.items():
     all_questions.extend(questions)
-# Function to implement Grad-CAM visualization without external packages
+def create_multiscale_visualization(image, model):
+    import torch
+    import numpy as np
+    import torch.nn.functional as F
+    # Importar correctamente las transformaciones desde torchvision
+    from torchvision import transforms
+    import cv2
+    from PIL import Image
+    import matplotlib.pyplot as plt
+    
+    # Preprocesar la imagen para el modelo - corregimos aquí
+    transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    
+    # Crear una versión de la imagen para visualización
+    vis_transform = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ])
+    
+    img_tensor = transform(image).unsqueeze(0)
+    vis_img_tensor = vis_transform(image)
+    vis_img_array = vis_img_tensor.numpy().transpose(1, 2, 0)
+    
+    # Definir capas de interés en función del tipo de modelo
+    if hasattr(model, 'efficientnet_model') and hasattr(model.efficientnet_model, 'features'):
+        # Modelo EfficientNet dentro del ensemble
+        features = model.efficientnet_model.features
+        
+        # Extraer capas representativas de diferentes niveles
+        layers_count = len(features)
+        indices = [
+            int(layers_count * 0.2),   # Capa temprana: texturas, bordes
+            int(layers_count * 0.5),   # Capa media: formas, patrones
+            int(layers_count * 0.8),   # Capa profunda: estructuras complejas
+            -1                         # Última capa: características de alto nivel
+        ]
+        
+        target_layers = []
+        for idx in indices:
+            if idx < 0:
+                idx = layers_count + idx  # Convertir índice negativo
+            target_layers.append(features[idx])
+        
+        layer_names = [
+            "Low-Level Features",
+            "Medium-Level Features",
+            "High-Level Features",
+            "Discriminative Features"
+        ]
+    
+    # Para ViT
+    elif hasattr(model, 'vit_model') and hasattr(model.vit_model, 'blocks'):
+        blocks = model.vit_model.blocks
+        
+        # Extraer bloques representativos
+        blocks_count = len(blocks)
+        indices = [
+            0,                       # Primer bloque: características básicas
+            blocks_count // 3,       # Bloque temprano
+            2 * blocks_count // 3,   # Bloque intermedio
+            -1                       # Último bloque: decisión final
+        ]
+        
+        target_layers = []
+        for idx in indices:
+            if idx < 0:
+                idx = blocks_count + idx  # Convertir índice negativo
+            target_layers.append(blocks[idx])
+        
+        layer_names = [
+            "Atención inicial",
+            "Atención de nivel medio",
+            "Atención de nivel alto",
+            "Atención final"
+        ]
+    
+    # Fallback: buscar capas convolucionales a diferentes profundidades
+    else:
+        conv_layers = []
+        # Recopilar todas las capas convolucionales
+        for name, module in model.named_modules():
+            if isinstance(module, torch.nn.Conv2d):
+                conv_layers.append((name, module))
+        
+        target_layers = []
+        if conv_layers:
+            # Seleccionar capas representativas
+            layer_count = len(conv_layers)
+            indices = [
+                0,                    # Primera capa
+                layer_count // 3,     # Capa temprana
+                2 * layer_count // 3, # Capa intermedia
+                -1                    # Última capa
+            ]
+            
+            for idx in indices:
+                if idx < 0:
+                    idx = layer_count + idx  # Convertir índice negativo
+                _, module = conv_layers[idx]
+                target_layers.append(module)
+            
+            layer_names = [
+                "Bajo nivel (bordes)",
+                "Nivel medio (formas)",
+                "Nivel alto (estructuras)",
+                "Decisión final"
+            ]
+    
+    # Si no encontramos capas adecuadas
+    if not target_layers:
+        return [image] * 4, ["No se pudieron extraer características multiescala"]
+    
+    # Clase para capturar activaciones
+    class FeatureExtractor:
+        def __init__(self):
+            self.features = None
+            self.hook_handle = None
+        
+        def hook_fn(self, module, input, output):
+            self.features = output
+    
+    # Crear extractores para cada capa
+    extractors = [FeatureExtractor() for _ in target_layers]
+    
+    # Registrar hooks
+    for extractor, layer in zip(extractors, target_layers):
+        extractor.hook_handle = layer.register_forward_hook(extractor.hook_fn)
+    
+    # Forward pass para extraer características
+    model.eval()
+    with torch.no_grad():
+        _ = model(img_tensor)
+    
+    # Generar visualizaciones para cada capa
+    visualizations = []
+    
+    for i, extractor in enumerate(extractors):
+        # Verificar que tengamos características para esta capa
+        if extractor.features is None:
+            # Si falla, añadir imagen original
+            visualizations.append(image)
+            continue
+        
+        # Para capas convolucionales (BCHW)
+        if len(extractor.features.shape) == 4:
+            # Calcular la importancia de cada canal (usando la magnitud)
+            feature_map = torch.mean(torch.abs(extractor.features), dim=1)[0]
+            
+            # Normalizar
+            feature_map = feature_map - feature_map.min()
+            feature_map = feature_map / (feature_map.max() + 1e-8)
+            
+            # Redimensionar a tamaño de imagen
+            feature_map = F.interpolate(
+                feature_map.unsqueeze(0).unsqueeze(0),
+                size=(224, 224),
+                mode='bilinear',
+                align_corners=False
+            )[0, 0]
+            
+            # Convertir a numpy
+            feature_map_np = feature_map.cpu().numpy()
+            
+        # Para transformadores (BLD)
+        elif len(extractor.features.shape) == 3:
+            try:
+                # Extraer los tokens de imagen (sin token CLS)
+                if extractor.features.shape[1] > 1:
+                    patch_tokens = extractor.features[0, 1:, :]
+                    
+                    # Calcular la importancia de cada token (magnitud)
+                    token_importances = torch.norm(patch_tokens, dim=1)
+                    
+                    # Redimensionar a un mapa 2D (asumiendo parches cuadrados)
+                    map_size = int(torch.sqrt(torch.tensor(float(patch_tokens.shape[0]))))
+                    feature_map = token_importances.reshape(map_size, map_size)
+                    
+                    # Normalizar
+                    feature_map = feature_map - feature_map.min()
+                    feature_map = feature_map / (feature_map.max() + 1e-8)
+                    
+                    # Redimensionar a 224x224
+                    feature_map_np = feature_map.cpu().numpy()
+                    feature_map_np = cv2.resize(feature_map_np, (224, 224))
+                else:
+                    # Si no hay suficientes tokens, usar un mapa vacío
+                    feature_map_np = np.zeros((224, 224))
+            except:
+                # Si hay error en el reshape, usar un mapa vacío
+                feature_map_np = np.zeros((224, 224))
+        else:
+            # Para otros formatos no soportados
+            feature_map_np = np.zeros((224, 224))
+        
+        # Aplicar mapa de color
+        heatmap = cv2.applyColorMap(np.uint8(255 * feature_map_np), cv2.COLORMAP_JET)
+        heatmap = cv2.cvtColor(heatmap, cv2.COLOR_BGR2RGB)
+        
+        # Superponer en la imagen original
+        original_img = (vis_img_array * 255).astype(np.uint8)
+        alpha = 0.4  # Transparencia
+        
+        # Combinar
+        overlay = heatmap * alpha + original_img * (1 - alpha)
+        overlay = np.clip(overlay, 0, 255).astype(np.uint8)
+        
+        # Convertir a imagen PIL
+        vis_img = Image.fromarray(overlay)
+        visualizations.append(vis_img)
+    
+    # Eliminar hooks
+    for extractor in extractors:
+        if extractor.hook_handle is not None:
+            extractor.hook_handle.remove()
+    
+    return visualizations, layer_names
 def apply_custom_gradcam(image, model, id_to_label):
     """
     Apply a custom implementation of Grad-CAM visualization to an image.
@@ -1428,10 +1647,10 @@ def main():
     #2 columnas para logo y titulo
     col1, col2 = st.columns([1, 3])
     with col1:
-        st.image("logo.png", width=300)
+        st.image("logo.png", width=500)
     with col2:
         st.title("Melanoma Diagnostic System")
-        st.title("Multi-Modal Melanoma Diagnostic System")
+    st.title("Multi-Modal Melanoma Diagnostic System")
     st.write("""
     This advanced application combines the analysis of your responses with a computer vision model
     to provide a more accurate assessment of melanoma risk. Complete the questionnaire (by text or voice) and upload
@@ -1731,21 +1950,40 @@ def main():
                     st.image(image, caption="Uploaded Image", width=300)
                 
                 # Generate Grad-CAM visualization if model is loaded
-                if vision_model_loaded:
-                    with col2:
-                        st.write("**Feature Importance Visualization**")
-                        with st.spinner("Generating heatmap visualization..."):
-                            # Get custom Grad-CAM visualization
-                            vis_image, _, pred_label, binary_result, binary_confidence = apply_custom_gradcam(
-                                image, vision_model, id_to_label
-                            )
+                with col2:
+                    # En la sección donde muestras los resultados de la imagen
+                    with st.expander("Multiscale visualization", expanded=True):
+                        st.write("**Multiscale Injury Analysis**")
+                        st.write("This visualization shows how the model analyzes different levels of features, from edges and textures to complex structures.")
+                        
+                        with st.spinner("Generating multi-scale visualization..."):
+                            visualizations, layer_names = create_multiscale_visualization(image, vision_model)
                             
-                            if vis_image:
-                                st.image(vis_image, caption=f"Grad-CAM Visualization", width=300)
-                                st.write(f"Initial Classification: **{binary_result}** (Confidence: {binary_confidence:.2f})")
-                                st.info("Red/yellow areas highlight regions most influential for the model's prediction")
+                            # Crear contenedor para las visualizaciones
+                            if visualizations and len(visualizations) > 0:
+                                # Mostrar en una cuadrícula de 2x2
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.image(visualizations[0], caption=layer_names[0], width=250)
+                                    st.write("Detects **edges, textures, and basic colors**")
+                                
+                                with col2:
+                                    if len(visualizations) > 1:
+                                        st.image(visualizations[1], caption=layer_names[1], width=250)
+                                        st.write("Identify **shapes and patterns**")
+                                
+                                col3, col4 = st.columns(2)
+                                with col3:
+                                    if len(visualizations) > 2:
+                                        st.image(visualizations[2], caption=layer_names[2], width=250)
+                                        st.write("Recognizes specific **melanoma structures**")
+                                
+                                with col4:
+                                    if len(visualizations) > 3:
+                                        st.image(visualizations[3], caption=layer_names[3], width=250)
+                                        st.write("Analyzes **critical features for diagnosis**")
                             else:
-                                st.warning("Could not generate visualization. Proceeding with regular analysis.")
+                                st.warning("The multi-scale display could not be generated for this image.")
                 
                 # Buttons for navigation
                 col1, col2, col3 = st.columns([1, 1, 2])
@@ -1803,7 +2041,7 @@ def main():
                     with col1:
                         st.image(resized_image, caption="Analyzed Image", width=300)
                     with col2:
-                        st.image(resized_vis_image, caption="Grad-CAM Visualization", width=300)
+                        st.image(resized_vis_image, caption="Critical Visualization", width=300)
 
                     
                     # Classify image
