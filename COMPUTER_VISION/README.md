@@ -2,37 +2,36 @@
 
 This folder contains various scripts and resources focused on the detection of melanomas in images. The goal is to develop and improve computer vision models to classify images as benign or malignant melanomas.
 
-## Contents
 
-- **`modelo_1.ipynb`**: 
-  A simple convolutional neural network (CNN) model that extracts features from images to classify whether a melanoma is present or not. This script serves as a starting point for melanoma detection.
+## Models Tested
 
-- **`modelo_1_torch.ipynb`**: 
-  An optimized version of the model designed to run on a GPU using CUDA, addressing the high computational cost of the previous script. This script leverages a pre-trained ResNet model for feature extraction and fine-tuning.
+We conducted extensive experiments with various architectures to achieve optimal melanoma classification performance:
 
-- **`melanoma_model_1_torch.pth`**: 
-  The saved weights of the model trained in `modelo_1_torch.ipynb`.
+### Initial Approach
+- **Custom CNN**: At the beginning of the project, we developed a custom convolutional neural network from scratch to establish a baseline for melanoma detection. This model helped us understand the complexity of the task and the importance of feature extraction for skin lesion classification.
 
-- **`melanoma_model_1.weights.h5`**:  
-  The saved weights of the model trained in `modelo_1.ipynb`.
+### Individual Models
+- **ResNet50**: A deep residual network that allows training of deeper networks by introducing skip connections.
+- **EfficientNetB0 with SE (Squeeze-and-Excitation)**: Enhanced EfficientNet with channel attention mechanisms to improve feature representation.
+- **Vision Transformers (ViT)**:
+  - **ViT-B16**: Base version of the Vision Transformer with 16x16 pixel patches.
+  - **ViT-L16**: Larger version with increased capacity for feature learning.
 
-- **`preprocessing_dataISIC.ipynb`**:  
-  A script for preprocessing the ISIC dataset, including resizing, normalization, and data augmentation techniques.
+### Ensemble Approach
+We combined the best-performing models (ViT16 and SE-EfficientNetB0) into an ensemble. The optimal weight for each model's contribution was determined using various metaheuristic optimization techniques:
 
-- **`loading_dataset_kaddle.ipynb`**:  
-  A script for loading and preparing datasets from Kaggle for training and evaluation.
+- **Genetic Algorithms**: Population-based optimization inspired by natural selection.
+- **Simulated Annealing**: Probabilistic technique for approximating global optimization.
+- **Particle Swarm Optimization**: Population-based optimization inspired by social behavior.
+- **Grid Search**: Exhaustive search through specified parameter values.
 
-## Dataset
+This ensemble approach significantly improved classification performance compared to individual models.
 
-The models in this folder have been trained using a melanoma dataset obtained from Kaggle. This dataset contains labeled images of skin lesions, which were used to train and evaluate the performance of the models.
+## Datasets
 
+The models in this folder have been primarily trained and evaluated using the Harvard HAM10000 dataset, a large collection of dermatoscopic images of common pigmented skin lesions. To ensure our models generalize well, we also performed validation with:
 
-## Requirements
+- **Kaggle Melanoma Classification Challenge Dataset**: Used for additional validation.
 
+Cross-dataset evaluation helped confirm that our models can generalize to images captured under different conditions and with different equipment.
 
-- For `modelo_1_torch.ipynb`, ensure that CUDA is installed and a compatible GPU is available to run the script efficiently.
-- Pre-trained ResNet weights are automatically downloaded when running the script.
-
-## Purpose
-
-These scripts aim to explore different approaches to melanoma detection, starting from basic CNN models to more advanced techniques using pre-trained architectures. The folder provides a foundation for further experimentation and improvement in melanoma classification tasks.
