@@ -49,8 +49,8 @@ Melanoma Detector is a comprehensive system designed to assist in melanoma risk 
 
 ## Technology Stack
 - **Core Framework:** Python, Streamlit
-- **NLP:** Transformers, HuggingFace, Whisper (speech-to-text)
-- **Computer Vision:** PyTorch, torchvision
+- **NLP:** Transformers, HuggingFace, Whisper (speech-to-text), LmStudio
+- **Computer Vision:** PyTorch, torchvision, TensorFlow
 - **LLM Integration:** llama-cpp-python
 - **RAG Components:** FAISS, Sentence Transformers
 - **Data Processing:** pandas, numpy, langchain
@@ -63,7 +63,3 @@ Melanoma Detector is a comprehensive system designed to assist in melanoma risk 
   - Fine-tuned text classification model
   - Ensemble vision model
   - LLM model (local GGUF format)
-
-### Setup
-1. Clone the repository
-2. Install dependencies:
